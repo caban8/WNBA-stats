@@ -34,7 +34,7 @@ options(scipen = 999, digits = 3)
 if(!require('pacman')) {install.packages('pacman')}
 
 # Load all libraries
-pacman::p_load(bestglm, glmnet, leaps, car, tidyverse, pROC, caret, tree, rpart, randomForest, rpart.plot)
+pacman::p_load(readxl, bestglm, glmnet, leaps, car, tidyverse, pROC, caret, tree, rpart, randomForest, rpart.plot)
 
 
 ```
