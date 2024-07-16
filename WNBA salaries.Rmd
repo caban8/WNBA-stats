@@ -1,0 +1,283 @@
+---
+title: "Predicting salaries of WNBA players"
+author: Caban
+date: '`r Sys.Date()`'
+output:
+  html_document:
+    code_folding: hide
+    number_sections: yes
+    theme: lumen
+    toc: yes
+    toc_depth: 3
+    toc_float: yes
+urlcolor: blue
+---
+
+
+```{r setup, include=FALSE}
+
+# Set knitr options
+knitr::opts_chunk$set(
+  echo = T, 
+  fig.width=8, 
+  # fig.height=4, 
+  warning = F, 
+  dpi = 300,
+  message = F,
+  comment = NA
+  )
+
+
+options(scipen = 999, digits = 3)
+
+
+if(!require('pacman')) {install.packages('pacman')}
+
+# Load all libraries
+pacman::p_load(bestglm, glmnet, leaps, car, tidyverse, pROC, caret, tree, rpart, randomForest, rpart.plot)
+
+
+```
+
+
+
+
+
+
+```{r}
+
+# create functions and general ggplot vectors to streamline code and make it more reproducible
+
+
+
+
+# Function to control the table output
+kable2 <- function(x) {
+  knitr::kable(x) 
+     }
+
+
+# Plot color palette 
+colors <- c(
+  "#6C946F",
+  "#FFD35A",
+  "#FFA823",
+  "#DC0083"
+)
+
+
+# Histogram
+plot_hist <- list(
+  geom_histogram(aes(y= after_stat(density)), fill=colors[1], color=colors[4]),
+  geom_density(color=colors[2], linewidth=1),
+  theme_light(),
+  theme(plot.title = element_text(hjust = 0.5))
+)
+
+
+# Line plot
+plot_line2 <- list(
+  geom_line(color = colors[1]),
+  scale_color_manual(values = c(colors[1], colors[2])),
+  guides(color = "none"),
+  theme_light(),
+  theme(
+    plot.title = element_text(hjust = 0.5)
+    )
+)
+
+
+```
+
+
+
+# Methodology
+
+
+## Datasets
+
+The WNBA players' stats were scraped form:
+https://www.basketball-reference.com/
+
+
+Salaries
+https://www.spotrac.com/wnba/rankings/
+
+CPI:
+https://stats.oecd.org
+
+
+
+
+## Variables
+
+
+Variables imported as part of the players' stats
+
+| Abbreviation | Description                            |
+|--------------|----------------------------------------|
+| Pos          | Position                               |
+| G            | Games                                  |
+| MP           | Minutes Played                         |
+| GS           | Games Started                          |
+| FG           | Field Goals                            |
+| FGA          | Field Goal Attempts                    |
+| FG%          | Field Goal Percentage                  |
+| 3P           | 3-Point Field Goals                    |
+| 3PA          | 3-Point Field Goal Attempts            |
+| 3P%          | 3-Point Field Goal Percentage          |
+| 2P           | 2-Point Field Goals                    |
+| 2PA          | 2-point Field Goal Attempts            |
+| 2P%          | 2-Point Field Goal Percentage          |
+| FT           | Free Throws                            |
+| FTA          | Free Throw Attempts                    |
+| FT%          | Free Throw Percentage                  |
+| ORB          | Offensive Rebounds                     |
+| TRB          | Total Rebounds                         |
+| AST          | Assists                                |
+| STL          | Steals                                 |
+| BLK          | Blocks                                 |
+| TOV          | Turnovers                              |
+| PF           | Personal Fouls                         |
+| PTS          | Points                                 |
+
+
+
+# Data Import and Cleaning
+
+
+## Salaries
+
+```{r}
+# Import salary dataset
+salaries <- read_csv("WNBA - salaries.csv")
+
+salaries %>% 
+  glimpse()
+```
+
+
+
+```{r}
+
+salaries %>% 
+  is.na() %>% 
+  colSums()
+
+```
+
+
+
+```{r}
+duplicates <- salaries %>% 
+  duplicated() %>% 
+  sum()
+
+
+
+
+```
+
+There were `r duplicates` duplicates in the salary dataset.
+
+```{r}
+salaries[duplicated(salaries),]
+```
+
+The only duplicate concers Sylvia Fowles.
+According to spotrac (url: https://www.spotrac.com/wnba/player/_/id/29907/sylvia-fowles#:~:text=Sylvia%20Fowles%20signed%20a%203%20year%20%2C%20%24333%2C540%20contract%20with%20the,average%20annual%20salary%20of%20%24111%2C180.) she extended her contract averaging 115k dollars a year. 
+As such this duplicate seems to be a random error and is safe to be removed.
+
+
+```{r}
+# Remove duplicates
+salaries <- salaries %>%
+  rename(year = Year) %>%
+  unique()
+```
+
+
+## WNBA stats
+
+
+```{r}
+# List player stats datasets for all years
+stats_files <- list.files("players stats")
+
+# Vector for import
+stats_import <- str_c("players stats/", stats_files)
+
+# Import all files
+stats_imported <- stats_import %>% 
+  map(read_excel)
+
+# Check compatibility
+stats_imported %>% 
+  map(names) %>% 
+  reduce(setdiff)
+```
+
+There are no differences in names of the datasets when compared one after another
+
+
+```{r}
+
+stats_imported %>% 
+  map_dbl(length) %>% 
+  unique()
+```
+
+All datasets have the same number of variables
+
+
+```{r}
+# Combine all WNBA stats datasets into one
+wnba_stats <- stats_imported %>% 
+  reduce(add_row)
+
+```
+
+
+```{r}
+wnba_stats %>% 
+  duplicated() %>% 
+  sum()
+
+```
+
+
+
+```{r}
+
+wnba_stats %>% 
+  is.na() %>% 
+  colSums() %>% 
+  sort(decreasing = T)
+  
+
+```
+
+
+```{r}
+
+wnba_stats %>% 
+  is.na() %>% 
+  colSums() %>% 
+  keep(~. != 0) %>% 
+  names() %>% 
+  str_replace("%", "")
+
+
+wnba_stats %>% 
+  filter(if_any(everything(), ~is.na(.))) %>% 
+  select(where(~any(is.na(.))))
+
+wnba_stats
+
+```
+
+
+
+
+
+
