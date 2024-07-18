@@ -28,13 +28,13 @@ knitr::opts_chunk$set(
   )
 
 
-options(scipen = 999, digits = 3)
+
 
 
 if(!require('pacman')) {install.packages('pacman')}
 
 # Load all libraries
-pacman::p_load(readxl, bestglm, glmnet, leaps, car, tidyverse, pROC, caret, tree, rpart, randomForest, rpart.plot)
+pacman::p_load(readxl, rstatix, bestglm, glmnet, leaps, car, tidyverse, pROC, caret, tree, rpart, randomForest, rpart.plot)
 
 
 ```
@@ -239,6 +239,13 @@ wnba_stats <- stats_imported %>%
 
 
 ```{r}
+
+glimpse(wnba_stats)
+
+```
+
+
+```{r}
 wnba_stats %>% 
   duplicated() %>% 
   sum()
@@ -246,33 +253,186 @@ wnba_stats %>%
 ```
 
 
+```{r}
+
+wnba_stats %>% 
+  select(where(is.character)) %>% 
+  select(-Player) %>% 
+  map(unique)
+
+
+```
+
+
+### Correcting vector type
+
+```{r}
+
+wnba_stats <- wnba_stats %>% 
+  mutate(
+    across(ends_with("%"), ~as.double(.))
+  )
+
+```
+
+
+### Summary stats
 
 ```{r}
 
 wnba_stats %>% 
+  get_summary_stats()
+
+```
+
+
+### Correcting duplicate variables
+
+
+```{r}
+duplicated_vars <- wnba_stats %>% 
+  as.list.data.frame() %>% 
+  duplicated() 
+
+
+wnba_stats[, duplicated_vars]
+
+
+
+
+  
+
+```
+
+Two variables are duplicated. 
+
+
+```{r}
+
+
+# Remove duplicates
+wnba_stats <- wnba_stats[, !duplicated_vars]
+
+
+```
+
+
+
+### Missing data
+
+
+```{r}
+
+wnba_missing <- wnba_stats %>% 
   is.na() %>% 
   colSums() %>% 
-  sort(decreasing = T)
+  sort(decreasing = T) %>% 
+  keep(~. != 0)
+
+wnba_missing %>% 
+  enframe(name = "variable", value = "missing_sum")
   
+
+```
+
+Missing data were observed only for the variables measuring percentage of successes in a given performance category.
+
+Let's inspect observations in terms of the absolute success and overall attempts separately
+for each category only for the missing data.
+
+
+```{r}
+## Inspect all missing observations ##
+
+# create vector for filtering over missing data
+missing_filter <- wnba_missing %>% 
+  names() %>% 
+  str_replace("%", "") 
+
+
+# Empty list
+wnba_NAs <- list()
+
+# Obtain separate datasets with missing variables for each set of variables
+for (i in seq_along(missing_filter)) {
+  
+  wnba_NAs[[i]] <- wnba_stats %>% 
+    select(starts_with(missing_filter[i])) %>% 
+    filter(if_any(everything(), ~is.na(.))) %>% 
+    select(sort(names(.))) %>% 
+    set_names(c("Absolute successes", "Pct successes", "Total attemps")) %>% 
+    mutate(category = missing_filter[[i]])
+  
+}
+
+
+wnba_NAs %>% 
+  map(unique) %>% 
+  reduce(add_row) %>% 
+  select(category, everything())
+```
+
+As we can see, missing data for percentage of success occurred only in situations when there were zero total attempts. 
+This makes sense, because you can obtain a proportion out of nothing.
+
+
+```{r}
+missing_filter %>% 
+  map(select, .data = wnba_stats)
+
+wnba_chunks <- missing_filter %>% 
+  map(~select(wnba_stats, starts_with(.))) %>% 
+  map(drop_na)
+
+
+wnba_chunks %>% 
+  map(cor_test)
+```
+
+
+```{r}
+wnba_chunks %>% 
+  map(plot)
+
+
+```
+
+There are strong linear associations between successes and attempts for each category of player's performance, above 0.9 high.
+In case of linear models, it would be necessary to remove either of the two for each pair, in order to avoid collinearity. 
+
+Interestingly, the relationship between the percentage of successful attempts and the absolute values of the sucessess and attempts is not linear. The majority of observations had between 30% and 60% of successful attempts, showing also a relatively large dispersion of absolute attempts and successes.
+Players below or above this range were noticeably similar to one another in terms of absolute attempts and successes which were overall closer to zero.
+This implies that having just a few attempts makes the player's percentage of successes a less objective performance measure, as one or two shots can decide whether a player has 0 or 100% success rate. 
+
+
+```{r}
+
+wnba_chunks %>% 
+  map(
+    ~filter(., .[[names(.)[[2]]]] <= 2)
+    ) %>% 
+  map(
+    ~count(., .[[names(.)[[3]]]])
+  )
 
 ```
 
 
 ```{r}
+wnba_chunks %>% 
+  map(
+    ~filter(., .[[names(.)[[2]]]] > 50)
+    ) %>% 
+  map(plot)
+```
 
-wnba_stats %>% 
-  is.na() %>% 
-  colSums() %>% 
-  keep(~. != 0) %>% 
-  names() %>% 
-  str_replace("%", "")
 
-
-wnba_stats %>% 
-  filter(if_any(everything(), ~is.na(.))) %>% 
-  select(where(~any(is.na(.))))
-
-wnba_stats
+```{r}
+wnba_chunks %>% 
+  map(
+    ~filter(., .[[names(.)[[2]]]] > 50)
+    ) %>% 
+  map(cor_test)
 
 ```
 
