@@ -34,7 +34,7 @@ knitr::opts_chunk$set(
 if(!require('pacman')) {install.packages('pacman')}
 
 # Load all libraries
-pacman::p_load(readxl, rstatix, bestglm, glmnet, leaps, car, tidyverse, pROC, caret, tree, rpart, randomForest, rpart.plot)
+pacman::p_load(DT, readxl, rstatix, bestglm, glmnet, leaps, car, tidyverse, pROC, caret, tree, rpart, randomForest, rpart.plot)
 
 
 ```
@@ -53,7 +53,7 @@ pacman::p_load(readxl, rstatix, bestglm, glmnet, leaps, car, tidyverse, pROC, ca
 
 # Function to control the table output
 kable2 <- function(x) {
-  knitr::kable(x) 
+  datatable(x)
      }
 
 
@@ -194,7 +194,100 @@ As such this duplicate seems to be a random error and is safe to be removed.
 salaries <- salaries %>%
   rename(year = Year) %>%
   unique()
+
+
+# Format salaries to double
+salaries$Salary
+
+salaries <- salaries %>% 
+  mutate(
+    Salary = str_replace_all(Salary, pattern = "\\$|,", "") %>% as.double()
+  )
+
+
+  
+
 ```
+
+
+
+
+
+
+
+### Adjusting salaries for inflation
+
+Our dependent variable is salary. As we have data from several years, we would like to adjust the values for inflation. This way they will reflect a more "*true*" value across years.
+
+
+```{r}
+salaries %>%
+  count(year) %>% 
+  kable2()
+```
+
+
+We have salary data for years `r min(salaries$year)` - `r max(salaries$year)`.
+
+
+```{r}
+cpi <- read_csv("CPI.csv")
+cpi2 <- cpi %>%
+  filter(
+    Measure == "Index",
+    Country == "United States",
+    Subject == "CPI: 01-12 - All items",
+    Time %in% c(as.character(2018:2022), str_c("Q", 1:3, "-2023"))
+    ) %>%
+  select(Time, Value) %>%
+  mutate(Time = str_replace(Time, "Q[1-3]-", "")) %>%
+  group_by(Time) %>%
+  summarise(
+    CPI = mean(Value) # We take the mean of the quaterly 2023 data
+  ) %>%
+  mutate(year = as.double(Time)) %>%
+  select(-Time)
+```
+
+Here is the formula for the inflation adjustment factor:
+
+$$ Inflation\; Adjustment\; Factor = \frac{CPI \; in\; Base\; Year}{CPI \; in\;
+Current\; Year} $$
+
+We choose 2023 as the base year. 
+Therefore, we will adjust the salaries from previous years (2018 to 2022) to reflect their value in 2023 dollars.
+
+
+```{r}
+CPI_base <- cpi2 %>% 
+  filter(year == 2023) %>% 
+  pull(CPI)
+  
+
+salaries <- salaries %>%
+  left_join(cpi2) %>%
+  mutate(
+    iaf = CPI_base / CPI,
+    salary_adj = Salary * iaf
+  ) %>% 
+  select(-c(CPI, iaf))
+
+# Extract a single player that played in most years
+player_example <- salaries %>% 
+  count(Player) %>% 
+  arrange(desc(n)) %>% 
+  slice(1) %>% 
+  pull(Player)
+
+salaries %>% 
+  select(Player, year, Salary, salary_adj) %>% 
+  filter(Player == player_example) %>% 
+  kable2()
+
+```
+
+As expected, the salaries for all years expect for the current (base) year increased, as to reflect their value in terms of the value of 2023 dollar.
+
 
 
 ## WNBA stats
@@ -206,6 +299,10 @@ stats_files <- list.files("players stats")
 
 # Vector for import
 stats_import <- str_c("players stats/", stats_files)
+
+# Extract year
+wnba_year <- str_extract(stats_files, pattern = "[0-9]+") %>% 
+  as.double()
 
 # Import all files
 stats_imported <- stats_import %>% 
@@ -233,6 +330,10 @@ All datasets have the same number of variables
 ```{r}
 # Combine all WNBA stats datasets into one
 wnba_stats <- stats_imported %>% 
+  map2(
+    wnba_year,
+    ~mutate(.x, year = .y)
+  ) %>% 
   reduce(add_row)
 
 ```
@@ -286,10 +387,13 @@ wnba_stats %>%
 ```
 
 
-### Correcting duplicate variables
+### Correcting duplicates 
 
+#### Duplicated variables
 
 ```{r}
+
+# Correcting duplicate variables
 duplicated_vars <- wnba_stats %>% 
   as.list.data.frame() %>% 
   duplicated() 
@@ -318,12 +422,145 @@ wnba_stats <- wnba_stats[, !duplicated_vars]
 
 
 
+#### Duplicated observations
+
+```{r}
+
+wnba_stats %>% 
+  duplicated() %>% 
+  sum()
+
+```
+
+
+
+```{r}
+
+wnba_stats %>% 
+  select(Player, year) %>% 
+  duplicated() %>% 
+  sum()
+
+```
+
+
+
+```{r}
+player_duplicates <- wnba_stats %>% 
+  count(Player, year) %>% 
+  filter(n >= 2) %>% 
+  arrange(desc(n))
+
+player_duplicates %>% 
+  kable2()
+
+```
+
+We have `r nrow(player_duplicates)` cases in which a given player in a given year had more than one set of stats.
+
+
+```{r}
+
+wnba_stats %>% 
+  count(Player, Team, year) %>% 
+  filter(n >= 2)
+
+
+
+
+```
+
+
+This can be explained by some of the players changing their team at least once in a given year.
+
+This raises a methodological question. 
+Given that the salaries dataset shows salaries for a given year, in order to combine those with wnba stats each player should have one summarized set of stats for a given year.
+
+A possible solution is to sum stats over a given year for those players who played in more than one team during this year. 
+
+The only limitation would be the position variable, as it is a categorical variable. 
+
+```{r}
+
+wnba_stats %>% 
+  count(Player, Pos, year) %>% 
+  filter(n >= 2) %>% 
+  count(Player, year) %>% 
+  filter(n >= 2)
+
+```
+
+However, each player that changed team in a given year nevertheless remained playing on the same position.
+
+
+
+```{r}
+
+wnba_summarized <- wnba_stats %>% 
+  group_by(Player, year) %>% 
+  select(-ends_with("%")) %>% # Exclude percentage variables
+  summarise(
+    across(where(is.double), ~sum(.))
+  ) %>% 
+  ungroup()
+
+wnba_position <- wnba_stats %>% 
+  group_by(Player, year) %>%
+  select(Pos) %>% 
+  slice(1) %>% 
+  ungroup()
+  
+
+wnba_stats2 <- wnba_position %>% 
+  left_join(wnba_summarized)
+
+```
+
+```{r}
+# create vector for filtering over missing data
+
+pct_filter <- wnba_stats %>% 
+  select(ends_with("%") )%>% 
+  names() %>% 
+  str_replace("%", "") 
+
+# Vector to loop over
+wnba_pct <- list()
+
+# Obtain percentages after data modification
+for (var in pct_filter) {
+  
+  # Select a pair of attemps and successes
+  vars <- wnba_stats2 %>% 
+    select(starts_with(var)) %>% 
+    select(sort(names(.)))
+  
+  # Calculate percentage of successes over attemps
+  pct <- vars[, 1] / vars[, 2]
+  
+  wnba_pct[[var]] <- pct
+  
+  
+}
+
+wnba_pct <- wnba_pct %>% 
+  reduce(add_column) %>% 
+  rename_with(~str_c(., "%"))
+
+
+wnba_stats3 <- wnba_stats2 %>% 
+  add_column(wnba_pct) 
+
+```
+
+
+
 ### Missing data
 
 
 ```{r}
 
-wnba_missing <- wnba_stats %>% 
+wnba_missing <- wnba_stats3 %>% 
   is.na() %>% 
   colSums() %>% 
   sort(decreasing = T) %>% 
@@ -344,24 +581,20 @@ for each category only for the missing data.
 ```{r}
 ## Inspect all missing observations ##
 
-# create vector for filtering over missing data
-missing_filter <- wnba_missing %>% 
-  names() %>% 
-  str_replace("%", "") 
 
 
 # Empty list
 wnba_NAs <- list()
 
 # Obtain separate datasets with missing variables for each set of variables
-for (i in seq_along(missing_filter)) {
+for (i in seq_along(pct_filter)) {
   
-  wnba_NAs[[i]] <- wnba_stats %>% 
-    select(starts_with(missing_filter[i])) %>% 
+  wnba_NAs[[i]] <- wnba_stats3 %>% 
+    select(starts_with(pct_filter[i])) %>% 
     filter(if_any(everything(), ~is.na(.))) %>% 
     select(sort(names(.))) %>% 
     set_names(c("Absolute successes", "Pct successes", "Total attemps")) %>% 
-    mutate(category = missing_filter[[i]])
+    mutate(category = pct_filter[[i]])
   
 }
 
@@ -377,11 +610,11 @@ This makes sense, because you can obtain a proportion out of nothing.
 
 
 ```{r}
-missing_filter %>% 
-  map(select, .data = wnba_stats)
+pct_filter %>% 
+  map(select, .data = wnba_stats3)
 
-wnba_chunks <- missing_filter %>% 
-  map(~select(wnba_stats, starts_with(.))) %>% 
+wnba_chunks <- pct_filter %>% 
+  map(~select(wnba_stats3, starts_with(.))) %>% 
   map(drop_na)
 
 
@@ -400,19 +633,24 @@ wnba_chunks %>%
 There are strong linear associations between successes and attempts for each category of player's performance, above 0.9 high.
 In case of linear models, it would be necessary to remove either of the two for each pair, in order to avoid collinearity. 
 
-Interestingly, the relationship between the percentage of successful attempts and the absolute values of the sucessess and attempts is not linear. The majority of observations had between 30% and 60% of successful attempts, showing also a relatively large dispersion of absolute attempts and successes.
-Players below or above this range were noticeably similar to one another in terms of absolute attempts and successes which were overall closer to zero.
-This implies that having just a few attempts makes the player's percentage of successes a less objective performance measure, as one or two shots can decide whether a player has 0 or 100% success rate. 
+Interestingly, the relationship between the percentage of successful attempts and the absolute values of the sucessess and attempts is not linear. 
+The majority of observations had a visible middle with 2P and FG being located mostly between 20% and 70% of successful attempts and
+3P between 15% and 50%, showing in the respective areas also a relatively large dispersion of absolute attempts and successes.
+Players below or above the respective ranges were noticeably similar to one another in terms of absolute attempts and successes having values close to zero.
+This implies that having just a few attempts makes the player's percentage of successes a less objective performance measure, as one or two shots can decide whether a player has 0 or 100% success rate.
+
+The exception is for FT (free throws) for which majority of the observations had a success rate above 60% which was also associated with a higher variance on both absolute measures - attempts and successes. 
+Given that a free throw is unhindered and always from the same position, it would on average easier to succeed in a given attempt. 
 
 
 ```{r}
 
 wnba_chunks %>% 
   map(
-    ~filter(., .[[names(.)[[2]]]] <= 2)
+    ~filter(., .[[names(.)[[3]]]] <= 0.2 | .[[names(.)[[3]]]] >= 0.70)
     ) %>% 
   map(
-    ~count(., .[[names(.)[[3]]]])
+    get_summary_stats
   )
 
 ```
@@ -427,12 +665,28 @@ wnba_chunks %>%
 ```
 
 
+
+
+
 ```{r}
+
 wnba_chunks %>% 
-  map(
-    ~filter(., .[[names(.)[[2]]]] > 50)
-    ) %>% 
+  map(select, 1:2) %>% 
   map(cor_test)
+
+```
+
+This poses a methodological trade-off dilemma.
+On one hand, the percentage index by showing the proportion of success to all attempts, seems to capture better the effectiveness of a player. 
+On the other, it seems to at the same time favor and neglect those players who had just several attempts in total.
+
+It also raises the question what to do with `NA` values. 
+
+
+
+```{r}
+
+wnba_stats3
 
 ```
 
@@ -440,4 +694,20 @@ wnba_chunks %>%
 
 
 
+## Combine datasets
+
+
+
+```{r}
+
+wnba_stats3
+
+
+salaries %>% 
+  left_join(wnba_stats3) %>% 
+  is.na() %>% 
+  colSums()
+
+
+```
 
