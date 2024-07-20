@@ -517,8 +517,7 @@ wnba_stats2 <- wnba_position %>%
 ```
 
 ```{r}
-# create vector for filtering over missing data
-
+# create vector for filtering over pairs of successes and attemps
 pct_filter <- wnba_stats %>% 
   select(ends_with("%") )%>% 
   names() %>% 
@@ -550,6 +549,9 @@ wnba_pct <- wnba_pct %>%
 
 wnba_stats3 <- wnba_stats2 %>% 
   add_column(wnba_pct) 
+
+wnba_stats3 %>% 
+  select(starts_with(pct_filter[1]))
 
 ```
 
@@ -699,15 +701,202 @@ wnba_stats3
 
 
 ```{r}
+# Move salaries one year back
+salaries_back <- salaries %>% 
+  mutate(year = year - 1)
+```
 
-wnba_stats3
+Assuming a logical perspective, we would expect that salary would be a consequence of player's prior overall performance.
+Therefore, before combining datasets, we should move salaries one year back to associate it with stats from the year prior to the year of salary.
 
 
-salaries %>% 
-  left_join(wnba_stats3) %>% 
+```{r}
+# Combine datasets
+wnba_combined <- salaries_back %>% 
+  left_join(wnba_stats3) 
+
+
+wnba_combined %>% 
   is.na() %>% 
-  colSums()
+  colSums() %>% 
+  sort(decreasing = T) %>% 
+  enframe(name = "variable", value = "Number of missing values") %>% 
+  kable2()
+
+```
+
+
+
+```{r}
+
+# Select only complete observations
+wnba_complete <- wnba_combined %>% 
+  filter(!if_all(-names(salaries), is.na)) %>% 
+  select(-c(Salary, Player)) %>% # Remove the unadjusted salary and player name
+  select( salary_adj, everything()) %>%
+  rename(
+    Games = G...4,
+    Minutes = MP...5
+  ) %>% 
+  rename_with(~str_replace_all(., "2", "Two_")) %>% 
+  rename_with(~str_replace_all(., "3", "Three_")) %>% 
+  rename_with(~str_replace_all(., "%", "_pct")) %>% 
+  mutate(
+    year = factor(year),
+    Pos = factor(Pos)
+    )
+
+
+# Adjust variable names to make them comptabile with all modelling functions
+
 
 
 ```
+
+
+
+```{r}
+
+wnba_complete %>% 
+  is.na() %>% 
+  colSums() %>% 
+  keep(~. != 0) %>% 
+  enframe(name = "variable", value = "Number of missing values") %>% 
+  kable2()
+
+```
+
+
+We are still left with a substantial number of observations that have zero attempts in at least one of the four performance categories.
+
+# EDA
+
+## Summary stats
+
+```{r}
+
+wnba_complete %>% 
+  get_summary_stats()
+
+```
+
+
+## Distribution of the variables
+
+```{r}
+
+pivoted_everything <- wnba_complete %>% 
+  pivot_longer(-c(Pos, year)) 
+
+pivoted_everything %>% 
+  ggplot(aes(value)) +
+  geom_histogram() +
+  facet_wrap(~name, scales = "free")
+
+
+```
+
+
+
+
+
+
+```{r}
+
+pivoted_everything %>% 
+  ggplot(aes(value)) +
+  geom_boxplot() +
+  facet_wrap(~name, scales = "free")
+
+
+```
+
+
+
+
+```{r}
+
+wnba_complete %>% 
+  freq_table(Pos) %>% 
+  ggplot(aes(Pos, prop)) +
+  geom_bar(stat = "identity")
+
+
+```
+
+
+## Salary over other variables
+
+
+### Salary throughout years
+
+
+```{r}
+
+wnba_complete %>% 
+  ggplot(aes(year, salary_adj)) +
+  geom_boxplot()
+
+
+```
+
+### Salary based on the position
+
+
+
+```{r}
+
+wnba_complete %>% 
+  ggplot(aes(Pos, salary_adj)) +
+  geom_boxplot()
+
+
+```
+
+
+
+### Salary based on stats
+
+
+```{r}
+
+pivoted_Onsalary <- wnba_complete %>% 
+  select(where(is.double)) %>% 
+  pivot_longer(-salary_adj)
+
+
+pivoted_Onsalary %>% 
+  ggplot(aes(value, salary_adj)) +
+  geom_point(alpha = 1/3) +
+  geom_smooth(se = F) +
+  facet_wrap(~name, scales = "free", ncol = 5)
+
+```
+
+
+
+
+
+```{r}
+
+pivoted_Onsalary %>% 
+  ggplot(aes(value, salary_adj)) +
+  geom_hex() +
+  geom_smooth(se = F) +
+  facet_wrap(~name, scales = "free", ncol = 5)
+
+```
+
+None of the continuous predictors has a linear relationship with the salary variable.
+Based on that it is to predict that variants of tree models will perform better.
+
+
+# Modelling
+
+
+
+
+
+
+
 
