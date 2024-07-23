@@ -34,7 +34,7 @@ knitr::opts_chunk$set(
 if(!require('pacman')) {install.packages('pacman')}
 
 # Load all libraries
-pacman::p_load(DT, readxl, rstatix, bestglm, glmnet, leaps, car, tidyverse, pROC, caret, tree, rpart, randomForest, rpart.plot)
+pacman::p_load(DT, readxl,leaps, rstatix, bestglm, glmnet, leaps, car, tidyverse, pROC, caret, tree, rpart, randomForest, rpart.plot)
 
 
 ```
@@ -294,6 +294,11 @@ As expected, the salaries for all years expect for the current (base) year incre
 
 
 ```{r}
+
+# Import codebook
+codebook <- read_excel("codebook.xlsx") %>% 
+  select(-1)
+
 # List player stats datasets for all years
 stats_files <- list.files("players stats")
 
@@ -738,9 +743,6 @@ wnba_complete <- wnba_combined %>%
     Games = G...4,
     Minutes = MP...5
   ) %>% 
-  rename_with(~str_replace_all(., "2", "Two_")) %>% 
-  rename_with(~str_replace_all(., "3", "Three_")) %>% 
-  rename_with(~str_replace_all(., "%", "_pct")) %>% 
   mutate(
     year = factor(year),
     Pos = factor(Pos)
@@ -891,10 +893,184 @@ None of the continuous predictors has a linear relationship with the salary vari
 Based on that it is to predict that variants of tree models will perform better.
 
 
+### Correlations between predictors
+
+
+```{r}
+
+cor_predictors <- wnba_complete %>% 
+  select(-c(salary_adj, year, Pos)) %>% 
+  cor_test(method = "pearson") %>% 
+  filter(cor != 1) %>% 
+  arrange(desc(abs(cor))) %>% 
+  mutate(across(where(is.numeric), ~round(., 3))) %>% 
+  select(-c(statistic, method))
+
+cor_predictors %>% 
+  kable2()
+
+```
+
+There is a substantial number of highly correlated predictors.
+First and foremost, we see almost perfect correlations between successes and attempts for each performance category pair.
+Similarly, there are very strong to near perfect correlations between number of points and some of the performance metrics, specifically, 2-points field goals, field goals, and free throws.
+
+
+
+
+```{r}
+cor_predictors %>% 
+  filter(var1 %in% pct_filter, var2 %in% pct_filter  )
+
+
+
+```
+
+
+
+```{r}
+
+cor_predictors %>% 
+  filter(abs(cor) >= 0.8) %>% 
+  count(var1, name = "High correlations count")  %>% 
+  arrange(desc(`High correlations count`)) %>% 
+  kable2()
+
+```
+
+Field goals, field goals attempts and points were the predictors with the highest count of strong correlations, posing highest risk for multicollinearity.
+
+
+
 # Modelling
 
 
 
+## Features modification
+
+
+```{r}
+# Rename variables to make  them comptabile with all modelling functions
+wnba_complete <-  wnba_complete %>% 
+  rename_with(~str_replace_all(., "2", "Two_")) %>% 
+  rename_with(~str_replace_all(., "3", "Three_")) %>% 
+  rename_with(~str_replace_all(., "%", "_pct"))
+```
+
+
+```{r}
+
+# Create two versions of datasets
+model_full <- wnba_complete %>% 
+  mutate(across(ends_with("pct"), ~replace_na(., 0))) 
+
+model_reduced <- wnba_complete %>% 
+  select(-ends_with("pct"))
+
+model_datasets <- tibble(
+  dataset = c("full", "reduced"),
+  whole = list(model_full, model_reduced)
+)
+
+
+```
+
+
+
+
+
+
+## Data separation
+
+
+
+```{r}
+
+set.seed(123)
+
+# Set up k-indexing
+indices <- sample(1:2, nrow(wnba_complete), prob = c(0.8, 0.2), replace = T)
+
+model_datasets <- model_datasets %>% 
+  mutate(
+    train = map(whole, ~.[indices == 1,]),
+    test = map(whole, ~.[indices == 2,]),
+    x_train = map(train, ~model.matrix(salary_adj ~ ., .x )[, -1]),
+    x_train_df = map(x_train, as_tibble),
+    y_train = map(train, ~.x$salary_adj)
+  )
+
+
+
+
+
+```
+
+
+## Linear models 
+
+
+
+```{r}
+
+# Extract regsubsets function
+regsubset_own <- function(data, nvmax, method = "forward") {
+  regsubsets(
+    data = data, 
+    nvmax = nvmax, 
+    x = salary_adj ~ ., 
+    method = method
+    )
+}
+
+
+# Function for fitting a new linear model based on regsubset
+subset_lm <- function(regsubset, id, data) {
+  
+  # Extract coefficients
+  coefs <- regsubset %>% 
+    coef(id = id) %>% 
+    names() %>% 
+    keep(~. != "(Intercept)")
+  
+  # Prepare formula
+  mod_formula <- str_c("salary_adj ~ ", str_c(coefs, collapse = " + ")) %>% 
+    as.formula()
+  
+  # Fit model
+  fit_lm <- lm(mod_formula, data = data)
+  
+  return(fit_lm)
+  
+}
+
+
+regsubsets_models <- model_datasets %>% 
+  select(dataset, train, x_train_df, y_train) %>% 
+  mutate(
+    id = map(train, ~1:(ncol(.) - 1)),
+    predictors_total = map_dbl(train, ncol),
+    fit_forward = map2(train, predictors_total, regsubset_own,method = "forward")
+    ) 
+  
+
+# Wymyślić cross-validation function
+
+regsubsets_models %>% 
+  unnest(id) %>% 
+  mutate(
+    lm = pmap(list(fit_forward, id, x_train_df), subset_lm)
+  )
+
+regsubsets_models$fit_forward[[1]] %>% 
+  coef(id = 3) %>% 
+  names() %>% 
+  keep(~. != "(Intercept)")
+  
+
+
+
+```
 
 
 
