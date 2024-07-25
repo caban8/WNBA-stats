@@ -34,7 +34,7 @@ knitr::opts_chunk$set(
 if(!require('pacman')) {install.packages('pacman')}
 
 # Load all libraries
-pacman::p_load(DT, readxl,leaps, rstatix, bestglm, glmnet, leaps, car, tidyverse, pROC, caret, tree, rpart, randomForest, rpart.plot)
+pacman::p_load(DT, readxl,leaps,furrr, rstatix, broom, bestglm, glmnet, leaps, car,  pROC, caret, tree, rpart, randomForest, rpart.plot, tidyverse, doParallel)
 
 
 ```
@@ -954,7 +954,20 @@ Field goals, field goals attempts and points were the predictors with the highes
 wnba_complete <-  wnba_complete %>% 
   rename_with(~str_replace_all(., "2", "Two_")) %>% 
   rename_with(~str_replace_all(., "3", "Three_")) %>% 
-  rename_with(~str_replace_all(., "%", "_pct"))
+  rename_with(~str_replace_all(., "%", "_pct")) %>% 
+  mutate(Pos = str_replace(Pos, "-", "_") %>% factor())
+
+
+# Turn factors into a dummy variable format
+model.matrix(~ ., data = wnba_complete) %>% 
+  as_tibble() %>% 
+  select(-1)
+```
+
+
+```{r}
+
+
 ```
 
 
@@ -986,19 +999,27 @@ model_datasets <- tibble(
 
 ```{r}
 
+
+
 set.seed(123)
 
 # Set up k-indexing
 indices <- sample(1:2, nrow(wnba_complete), prob = c(0.8, 0.2), replace = T)
 
+# Extract general formula
+general_formula <- salary_adj ~ .
+
 model_datasets <- model_datasets %>% 
   mutate(
     train = map(whole, ~.[indices == 1,]),
     test = map(whole, ~.[indices == 2,]),
-    x_train = map(train, ~model.matrix(salary_adj ~ ., .x )[, -1]),
-    x_train_df = map(x_train, as_tibble),
+    train_dummy = map(train, ~as_tibble(model.matrix(~ ., .x)[,-1])),
+    test_dummy = map(test, ~as_tibble(model.matrix(~ ., .x)[,-1])),
+    x_train = map(train, ~model.matrix(general_formula, .x )[, -1]),
     y_train = map(train, ~.x$salary_adj)
   )
+
+
 
 
 
@@ -1012,61 +1033,116 @@ model_datasets <- model_datasets %>%
 
 
 ```{r}
-
 # Extract regsubsets function
 regsubset_own <- function(data, nvmax, method = "forward") {
   regsubsets(
     data = data, 
     nvmax = nvmax, 
-    x = salary_adj ~ ., 
+    x = general_formula, 
     method = method
     )
 }
 
 
-# Function for fitting a new linear model based on regsubset
+# Fit lm using cross-validations
+
+
+
+# Function for predicting values from regsubset object
 subset_lm <- function(regsubset, id, data) {
   
   # Extract coefficients
-  coefs <- regsubset %>% 
-    coef(id = id) %>% 
+  xvars <- coef(regsubset, id = id) %>% 
     names() %>% 
     keep(~. != "(Intercept)")
   
-  # Prepare formula
-  mod_formula <- str_c("salary_adj ~ ", str_c(coefs, collapse = " + ")) %>% 
+  
+  # Create formula
+  form <- str_c("salary_adj ~ ", str_c(xvars, collapse = " + ")) %>% 
     as.formula()
   
-  # Fit model
-  fit_lm <- lm(mod_formula, data = data)
   
-  return(fit_lm)
+  # Set up the train control for 10-fold cross-validation
+  train_control <- trainControl(method = "cv", number = 10)
   
+  # Fit the linear model using the train function from the caret package
+  fit_lm <- train(form, data = data, method = "lm", trControl = train_control)
+  
+  fit_lm$results %>% 
+    select(RMSE, Rsquared, MAE) %>% 
+    as_tibble() %>% 
+    mutate(fit_lm = list(fit_lm$finalModel))
 }
 
 
 regsubsets_models <- model_datasets %>% 
-  select(dataset, train, x_train_df, y_train) %>% 
+  select(dataset, train, train_dummy, test_dummy) %>% 
   mutate(
     id = map(train, ~1:(ncol(.) - 1)),
     predictors_total = map_dbl(train, ncol),
-    fit_forward = map2(train, predictors_total, regsubset_own,method = "forward")
+    fit_forward = map2(train, predictors_total, regsubset_own,method = "forward"),
+    fit_backward = map2(train, predictors_total, regsubset_own,method = "backward")
     ) 
   
 
-# Wymyślić cross-validation function
-
-regsubsets_models %>% 
-  unnest(id) %>% 
+# Fit all best selected models 
+regsubsets_models2 <- regsubsets_models %>% 
+  select(-c(train,  test_dummy, predictors_total)) %>% 
+  pivot_longer(c(fit_forward, fit_backward), names_to = "method", values_to =  "reg_model") %>% 
+  unnest(id)  %>% 
   mutate(
-    lm = pmap(list(fit_forward, id, x_train_df), subset_lm)
-  )
+    lm = pmap(list(reg_model, id, train_dummy), subset_lm)
+  ) %>% 
+  unnest(lm) %>% 
+  mutate(across(where(is.double), ~round(., 3)))
 
-regsubsets_models$fit_forward[[1]] %>% 
-  coef(id = 3) %>% 
-  names() %>% 
-  keep(~. != "(Intercept)")
-  
+# Select the best models
+lm_models <- regsubsets_models2 %>% 
+  group_by(dataset) %>% 
+  arrange(RMSE) %>% 
+  slice(1) %>% 
+  select(dataset, fit_lm) 
+
+
+regsubsets_models2 %>% 
+  select(dataset, id, method, RMSE, MAE, Rsquared) %>% 
+  arrange(RMSE) %>% 
+  kable2() 
+
+```
+
+
+### Best models coefficients
+
+
+```{r}
+
+# Obtain coefficients, residuals and diagnostics
+lm_models <- lm_models %>% 
+  mutate(
+    coefs = map(fit_lm, ~lm.beta::lm.beta(.) %>% tidy()),
+    augmented = map(fit_lm, augment),
+    vif = map(fit_lm, vif)
+    )
+
+lm_coefs <- lm_models %>% 
+  select(dataset, coefs) %>% 
+  unnest() %>% 
+  group_by(dataset) %>% 
+  arrange(desc(std_estimate))
+
+lm_coefs %>% 
+  filter(dataset == "full") %>% 
+  kable2()
+
+
+```
+
+
+```{r}
+lm_coefs %>% 
+  filter(dataset == "reduced") %>% 
+  kable2()
 
 
 
@@ -1074,5 +1150,274 @@ regsubsets_models$fit_forward[[1]] %>%
 
 
 
+### Model diagnostics
 
 
+#### Normality assumption
+
+```{r}
+lm_models <- lm_models %>% 
+  mutate(
+    augmented = map(fit_lm, augment)
+  )
+
+lm_models2 <- lm_models %>% 
+  unnest(augmented) %>% 
+  select(-fit_lm)
+
+# Plot histograms
+lm_models2 %>% 
+  ggplot(aes(.resid)) +
+  geom_histogram() +
+  facet_wrap(~dataset)
+```
+
+
+```{r}
+# Plot Q-Q plots
+lm_models2 %>% 
+  ggplot(aes(sample = .resid)) +
+  geom_qq() +
+  geom_qq_line() +
+  facet_wrap(~dataset)
+  
+
+
+
+```
+
+
+#### Homoscedasticity assumption
+
+
+
+```{r}
+
+lm_models2 %>% 
+  ggplot(aes(.fitted, .resid)) +
+  geom_point() +
+  geom_smooth(se = F) +
+  facet_wrap(~dataset)
+  
+
+```
+
+#### Multicollinearity
+
+  
+```{r}
+lm_models$vif[[2]]
+```
+
+
+```{r}
+lm_models %>% 
+  select(dataset, vif) %>% 
+  unnest()
+
+```
+
+
+
+```{r}
+regsubsets_models2
+```
+
+## Lasso models
+
+
+## Tree models
+
+
+```{r}
+# Set multisession for parallel computing for specific chunks of code
+plan(multisession, workers = length(availableWorkers()) - 4)
+
+# Train very long trees
+tree_models <- model_datasets %>% 
+  select(dataset, train) %>% 
+  mutate(
+    tree_fit = map(
+      train, 
+      ~tree(general_formula, .x, control = tree.control(
+        mindev = 0.0001,
+        nobs = nrow(.x)
+        )))
+  )
+
+
+
+
+# Extract function for tree model
+cross_tree <- function(data) {
+  
+  # Create search grid for cp parameter
+  cp <- data.frame(cp = seq(0.001, 0.5, 0.005) )
+  
+  
+  # train cross-validation models
+  model <- train(
+    general_formula,
+    data = data,
+    method = "rpart",
+    trControl = trainControl(method = "cv", number = 10),
+    tuneGrid = cp
+    )
+  
+  model$results %>% 
+    select(cp, RMSE, Rsquared, MAE) %>% 
+    as_tibble() %>% 
+    mutate(fit_tree = list(model$finalModel))
+  
+}
+
+
+
+# Obtain tree models
+tree_models <- model_datasets %>% 
+  select(dataset, train) %>% 
+  mutate(fit_tree = future_map(train, cross_tree))
+
+
+# Arrange models in terms of RMSE
+tree_models2 <- tree_models %>% 
+  select(-train) %>% 
+  unnest(fit_tree) %>% 
+  arrange(RMSE)
+
+# Extract best tree models
+best_tree <- tree_models2 %>% 
+  group_by(dataset) %>% 
+  slice(1) %>% 
+  select(dataset, fit_tree)
+```
+
+
+```{r}
+tree_models2 %>% 
+  select(-fit_tree) %>% 
+  arrange(RMSE) %>% 
+  kable2()
+
+```
+
+### Tree leafs
+
+
+```{r}
+
+
+best_tree %>% 
+  mutate(plot = map(fit_tree, rpart.plot))
+
+```
+
+
+
+
+## Random forest
+
+
+```{r}
+# Extract function for tree model
+cross_forest <- function(data) {
+  
+  # Create search grid for mtry parameter
+  mtry <- data.frame(mtry = seq(2,sqrt(ncol(data)) + 7, 2)) # Na razie mniej, żeby nie przegrzewać procków
+  
+  
+  # train cross-validation models
+  model <- train(
+    general_formula,
+    data = data,
+    method = "rf",
+    trControl = trainControl(method = "cv", number = 10),
+    tuneGrid = mtry
+    )
+  
+  model$results %>% 
+    select(mtry, RMSE, Rsquared, MAE) %>% 
+    as_tibble() %>% 
+    mutate(fit_forest = list(model$finalModel))
+}  
+
+
+# Set up parallel backend
+num_cores <- detectCores()
+cl <- makeCluster(num_cores - 4)
+registerDoParallel(cl)
+
+# Fit random forest models
+forest_models <- model_datasets %>% 
+  select(dataset, train) %>% 
+  mutate(fit_forest = map(train, cross_forest))
+
+# Stop parallel computing
+stopCluster(cl)
+registerDoSEQ()
+
+# Extract best models 
+best_forest <- forest_models %>% 
+  unnest(fit_forest) %>% 
+  group_by(dataset) %>% 
+  arrange(RMSE) %>% 
+  select(dataset, fit_forest) %>% 
+  slice(1)
+
+```
+
+
+```{r}
+
+forest_models %>% 
+  unnest(fit_forest) %>% 
+  select(dataset, mtry, RMSE, Rsquared, MAE) %>% 
+  arrange(RMSE)
+
+```
+
+
+
+### Predictors importance
+
+
+```{r}
+
+
+best_forest <- best_forest %>% 
+  mutate(
+    importance_purity = map(fit_forest, ~importance(.) %>% as.data.frame() %>% rownames_to_column())
+    )
+
+
+```
+
+
+```{r}
+
+
+best_forest %>% 
+  select(dataset, importance_purity) %>% 
+  unnest() %>% 
+  arrange(dataset, desc(IncNodePurity)) 
+
+```
+
+
+
+
+```{r}
+
+randomForest::partialPlot(
+  best_forest$fit_forest[[2]], 
+  x.var = Games, 
+  pred.data = model_datasets$train[[2]]
+  )
+
+```
+
+
+
+https://stackoverflow.com/questions/30097730/error-when-using-predict-on-a-randomforest-object-trained-with-carets-train
+
+Use non formula version for train to avoid the problem with predict random forest
