@@ -34,8 +34,11 @@ knitr::opts_chunk$set(
 if(!require('pacman')) {install.packages('pacman')}
 
 # Load all libraries
-pacman::p_load(DT, readxl,leaps,furrr, rstatix, broom, bestglm, glmnet, leaps, car,  pROC, caret, tree, rpart, randomForest, rpart.plot, tidyverse, doParallel)
+pacman::p_load(xgboost, DT, readxl,leaps,furrr, rstatix, broom, bestglm, glmnet, leaps, car,  pROC, caret, tree, rpart, randomForest, rpart.plot, doParallel, tidyverse)
 
+
+# Set up parallel backend
+num_cores <- detectCores() - 4
 
 ```
 
@@ -1226,6 +1229,125 @@ regsubsets_models2
 ## Lasso models
 
 
+
+```{r}
+
+set.seed(123)
+
+# Extract function for tree model
+cross_lasso <- function(x_data, y_data) {
+  
+  # Create search grid for lambda parameter
+  tune_grid <- data.frame(
+    alpha = 1,
+    lambda = 10^seq(3, -2, length = 100) 
+  )
+  
+  
+  # train cross-validation models
+  model <- train(
+    x_data, y_data,
+    method = "glmnet",
+    tuneGrid = tune_grid,
+    trControl = trainControl(method = "cv", number = 10)
+    )
+  
+  model$results %>% 
+    select(lambda, RMSE, Rsquared, MAE) %>% 
+    as_tibble() %>% 
+    mutate(fit_lasso = list(model$finalModel))
+  
+}
+
+# Start parallel computing
+cl <- makeCluster(num_cores)
+registerDoParallel(cl)
+
+
+
+lasso_models <- model_datasets %>% 
+  select(dataset, x_train, y_train) %>% 
+  mutate(
+    fit_lasso = map2(x_train, y_train, cross_lasso),
+    ) %>% 
+  unnest(fit_lasso) 
+
+# Stop parallel computing
+stopCluster(cl)
+registerDoSEQ()
+
+# Extract best models
+best_lasso <- lasso_models %>% 
+  group_by(dataset) %>% 
+  arrange(RMSE) %>% 
+  slice(1) %>% 
+  select(dataset, lambda, fit_lasso) %>% 
+  ungroup()
+
+
+lasso_models %>% 
+  select(-c(fit_lasso, x_train, y_train)) %>% 
+  arrange(RMSE)
+
+
+
+```
+
+
+```{r}
+
+best_lasso <- best_lasso %>% 
+  mutate(
+    coefs = map2(fit_lasso, lambda, ~coef(.x, s = .y)),
+    coefs = map(coefs, ~as.data.frame.matrix(.) %>% rownames_to_column() )
+    ) 
+
+best_lasso_reduced <- best_lasso %>% 
+  unnest(coefs) %>% 
+  filter(s1 != 0, rowname != "(Intercept)") %>% 
+  select(dataset, rowname) %>% 
+  nest() %>% 
+  mutate(
+    x_vars = map_chr(data, ~str_c(unlist(.), collapse = " + ")),
+    formula = str_c("salary_adj ~ ", x_vars),
+    formula = map(formula, as.formula)
+    ) %>% 
+  select(dataset, formula) %>% 
+  left_join(model_datasets)  %>% 
+  ungroup() %>% 
+  mutate(
+    fit_lm = map2(formula, train_dummy, ~lm(.x, .y))
+  ) %>% 
+  select(dataset, fit_lm) 
+
+
+best_lasso_reduced2 <- best_lasso_reduced %>% 
+  mutate(
+    map_df(fit_lm, glance),
+    vif = map(fit_lm, vif),
+    augmented = map(fit_lm, augment)
+    )
+  
+  
+
+
+```
+
+### Model diagnostics
+
+
+
+```{r}
+
+best_lasso_reduced2$fit_lm[[2]] %>% 
+  plot()
+
+```
+
+
+
+
+
 ## Tree models
 
 
@@ -1289,7 +1411,8 @@ tree_models2 <- tree_models %>%
 best_tree <- tree_models2 %>% 
   group_by(dataset) %>% 
   slice(1) %>% 
-  select(dataset, fit_tree)
+  select(dataset, fit_tree) %>% 
+  ungroup()
 ```
 
 
@@ -1319,11 +1442,11 @@ best_tree %>%
 
 
 ```{r}
-# Extract function for tree model
+# Extract function for randomForest fit
 cross_forest <- function(data) {
   
   # Create search grid for mtry parameter
-  mtry <- data.frame(mtry = seq(2,sqrt(ncol(data)) + 7, 2)) # Na razie mniej, żeby nie przegrzewać procków
+  mtry <- data.frame(mtry = seq(2,ncol(data), 2)) 
   
   
   # train cross-validation models
@@ -1342,9 +1465,8 @@ cross_forest <- function(data) {
 }  
 
 
-# Set up parallel backend
-num_cores <- detectCores()
-cl <- makeCluster(num_cores - 4)
+
+cl <- makeCluster(num_cores)
 registerDoParallel(cl)
 
 # Fit random forest models
@@ -1362,7 +1484,8 @@ best_forest <- forest_models %>%
   group_by(dataset) %>% 
   arrange(RMSE) %>% 
   select(dataset, fit_forest) %>% 
-  slice(1)
+  slice(1) %>% 
+  ungroup()
 
 ```
 
@@ -1384,7 +1507,7 @@ forest_models %>%
 ```{r}
 
 
-best_forest <- best_forest %>% 
+best_forest2 <- best_forest %>% 
   mutate(
     importance_purity = map(fit_forest, ~importance(.) %>% as.data.frame() %>% rownames_to_column())
     )
@@ -1396,7 +1519,7 @@ best_forest <- best_forest %>%
 ```{r}
 
 
-best_forest %>% 
+best_forest2 %>% 
   select(dataset, importance_purity) %>% 
   unnest() %>% 
   arrange(dataset, desc(IncNodePurity)) 
@@ -1415,6 +1538,103 @@ randomForest::partialPlot(
   )
 
 ```
+
+## Boosted tree
+
+```{r}
+
+# Extract function for xgb boosting fit
+cross_boost <- function(data) {
+  
+  # Create search grid for mtry parameter
+  tune_grid <- expand_grid(
+      nrounds = c(25, 50, 100, 200),
+      max_depth = seq(1, 9, 2),
+      eta = c(0.05, 0.1, 0.15, 0.2),
+      gamma = 0,
+      colsample_bytree = 1,
+      min_child_weight = 1,
+      subsample = 1
+      )  
+  
+  
+  # train cross-validation models
+  model <- train(
+    general_formula,
+    data = data,
+    method = "xgbTree",
+    trControl = trainControl(method = "cv", number = 10),
+    tuneGrid = tune_grid
+    )
+  
+  model$results %>% 
+    select(nrounds, max_depth, eta, RMSE, Rsquared, MAE) %>% 
+    as_tibble() %>% 
+    mutate(fit_boost = list(model$finalModel))
+}  
+
+
+# Set up parallel computing
+cl <- makeCluster(num_cores)
+registerDoParallel(cl)
+
+
+boosted_models <- model_datasets %>% 
+  select(dataset, train) %>% 
+  mutate(
+    fit_boost = map(train, cross_boost)
+  )
+
+
+# Stop parallem computing
+stopCluster(cl)
+registerDoSEQ()
+
+
+
+best_boosted <- boosted_models %>% 
+  unnest(fit_boost) %>% 
+  group_by(dataset) %>% 
+  arrange(RMSE) %>% 
+  select(dataset, fit_boost) %>% 
+  slice(1) %>% 
+  ungroup()
+
+
+```
+
+
+
+```{r}
+
+boosted_models %>% 
+  unnest(fit_boost) %>% 
+  select(-c(fit_boost, train)) %>% 
+  arrange(RMSE)
+
+```
+
+
+
+
+# Final model comparison
+
+
+```{r}
+
+best_boosted %>% 
+  rename(fit_forest = fit_boost) %>% 
+  add_row(best_forest) %>% 
+  left_join(model_datasets) %>% 
+  mutate(
+    rmse = map2(fit_forest, test, predict)
+  )
+
+
+
+```
+
+
 
 
 
