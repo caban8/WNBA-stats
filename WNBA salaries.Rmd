@@ -1031,6 +1031,46 @@ model_datasets <- model_datasets %>%
 ```
 
 
+## General functions
+
+
+```{r}
+
+# Extract model and its performance metrics from a caret object
+extract_caret <- function(model) {
+   
+  # Extract
+  model_stats <- model$results %>% 
+    select(-ends_with("SD")) %>% 
+    as_tibble() %>% 
+    mutate(fit = list(model$finalModel))
+  
+  # Return
+  return(model_stats)
+  
+}
+
+
+cross_fit <- function(x_data, y_data, tuning, method = "glmnet") {
+  
+  # train cross-validation models
+  model <- train(
+    x_data, y_data,
+    method = method,
+    tuneGrid = tuning,
+    trControl = trainControl(method = "cv", number = 10)
+  )
+  
+  
+  # Return model and its performance metrics
+  return(extract_caret(model))
+  
+}
+
+```
+
+
+
 ## Linear models 
 
 
@@ -1047,8 +1087,6 @@ regsubset_own <- function(data, nvmax, method = "forward") {
 }
 
 
-# Fit lm using cross-validations
-
 
 
 # Function for predicting values from regsubset object
@@ -1064,17 +1102,16 @@ subset_lm <- function(regsubset, id, data) {
   form <- str_c("salary_adj ~ ", str_c(xvars, collapse = " + ")) %>% 
     as.formula()
   
-  
   # Set up the train control for 10-fold cross-validation
   train_control <- trainControl(method = "cv", number = 10)
   
   # Fit the linear model using the train function from the caret package
-  fit_lm <- train(form, data = data, method = "lm", trControl = train_control)
+  model <- train(form, data = data, method = "lm", trControl = train_control)
   
-  fit_lm$results %>% 
-    select(RMSE, Rsquared, MAE) %>% 
-    as_tibble() %>% 
-    mutate(fit_lm = list(fit_lm$finalModel))
+  # Return model and its performance stats
+  return(extract_caret(model))
+  
+  
 }
 
 
@@ -1104,7 +1141,7 @@ lm_models <- regsubsets_models2 %>%
   group_by(dataset) %>% 
   arrange(RMSE) %>% 
   slice(1) %>% 
-  select(dataset, fit_lm) 
+  select(dataset, fit) 
 
 
 regsubsets_models2 %>% 
@@ -1229,46 +1266,28 @@ regsubsets_models2
 ## Lasso models
 
 
-
 ```{r}
 
 set.seed(123)
 
-# Extract function for tree model
-cross_lasso <- function(x_data, y_data) {
-  
-  # Create search grid for lambda parameter
-  tune_grid <- data.frame(
-    alpha = 1,
-    lambda = 10^seq(3, -2, length = 100) 
-  )
-  
-  
-  # train cross-validation models
-  model <- train(
-    x_data, y_data,
-    method = "glmnet",
-    tuneGrid = tune_grid,
-    trControl = trainControl(method = "cv", number = 10)
-    )
-  
-  model$results %>% 
-    select(lambda, RMSE, Rsquared, MAE) %>% 
-    as_tibble() %>% 
-    mutate(fit_lasso = list(model$finalModel))
-  
-}
+
+# Create search grid for lambda parameter in lasso
+tune_lasso <- data.frame(
+  alpha = 1,
+  lambda = 10^seq(3, -2, length = 100) 
+)
+
 
 # Start parallel computing
 cl <- makeCluster(num_cores)
 registerDoParallel(cl)
 
 
-
+# Fit lasso models
 lasso_models <- model_datasets %>% 
   select(dataset, x_train, y_train) %>% 
   mutate(
-    fit_lasso = map2(x_train, y_train, cross_lasso),
+    fit_lasso = map2(x_train, y_train, cross_fit, tuning = tune_lasso),
     ) %>% 
   unnest(fit_lasso) 
 
@@ -1281,7 +1300,7 @@ best_lasso <- lasso_models %>%
   group_by(dataset) %>% 
   arrange(RMSE) %>% 
   slice(1) %>% 
-  select(dataset, lambda, fit_lasso) %>% 
+  select(dataset, lambda, fit) %>% 
   ungroup()
 
 
@@ -1292,6 +1311,9 @@ lasso_models %>%
 
 
 ```
+
+
+
 
 
 ```{r}
@@ -1306,7 +1328,7 @@ best_lasso_reduced <- best_lasso %>%
   unnest(coefs) %>% 
   filter(s1 != 0, rowname != "(Intercept)") %>% 
   select(dataset, rowname) %>% 
-  nest() %>% 
+  nest(.by = dataset) %>% 
   mutate(
     x_vars = map_chr(data, ~str_c(unlist(.), collapse = " + ")),
     formula = str_c("salary_adj ~ ", x_vars),
@@ -1353,57 +1375,30 @@ best_lasso_reduced2$fit_lm[[2]] %>%
 
 ```{r}
 # Set multisession for parallel computing for specific chunks of code
-plan(multisession, workers = length(availableWorkers()) - 4)
-
-# Train very long trees
-tree_models <- model_datasets %>% 
-  select(dataset, train) %>% 
-  mutate(
-    tree_fit = map(
-      train, 
-      ~tree(general_formula, .x, control = tree.control(
-        mindev = 0.0001,
-        nobs = nrow(.x)
-        )))
-  )
+plan(multisession, workers = num_cores)
 
 
-
-
-# Extract function for tree model
-cross_tree <- function(data) {
-  
-  # Create search grid for cp parameter
-  cp <- data.frame(cp = seq(0.001, 0.5, 0.005) )
-  
-  
-  # train cross-validation models
-  model <- train(
-    general_formula,
-    data = data,
-    method = "rpart",
-    trControl = trainControl(method = "cv", number = 10),
-    tuneGrid = cp
-    )
-  
-  model$results %>% 
-    select(cp, RMSE, Rsquared, MAE) %>% 
-    as_tibble() %>% 
-    mutate(fit_tree = list(model$finalModel))
-  
-}
+# Set up tuning grid for tree models
+tune_tree <- data.frame(cp = seq(0.001, 0.5, 0.005) )
 
 
 
 # Obtain tree models
 tree_models <- model_datasets %>% 
-  select(dataset, train) %>% 
-  mutate(fit_tree = future_map(train, cross_tree))
+  select(dataset, x_train, y_train) %>% 
+  mutate(
+    fit_tree = map2(
+      x_train, 
+      y_train, 
+      cross_fit, 
+      tuning = tune_tree,
+      method = "rpart"
+      ))
 
 
 # Arrange models in terms of RMSE
 tree_models2 <- tree_models %>% 
-  select(-train) %>% 
+  select(-contains("train")) %>% 
   unnest(fit_tree) %>% 
   arrange(RMSE)
 
@@ -1411,7 +1406,7 @@ tree_models2 <- tree_models %>%
 best_tree <- tree_models2 %>% 
   group_by(dataset) %>% 
   slice(1) %>% 
-  select(dataset, fit_tree) %>% 
+  select(dataset, fit) %>% 
   ungroup()
 ```
 
@@ -1442,37 +1437,20 @@ best_tree %>%
 
 
 ```{r}
-# Extract function for randomForest fit
-cross_forest <- function(data) {
-  
-  # Create search grid for mtry parameter
-  mtry <- data.frame(mtry = seq(2,ncol(data), 2)) 
-  
-  
-  # train cross-validation models
-  model <- train(
-    general_formula,
-    data = data,
-    method = "rf",
-    trControl = trainControl(method = "cv", number = 10),
-    tuneGrid = mtry
-    )
-  
-  model$results %>% 
-    select(mtry, RMSE, Rsquared, MAE) %>% 
-    as_tibble() %>% 
-    mutate(fit_forest = list(model$finalModel))
-}  
+# Tuning grid for random forest
+tuning_forest <- data.frame(mtry = seq(2, ncol(model_full), 2)) 
 
 
 
+# Start parallel computing
 cl <- makeCluster(num_cores)
 registerDoParallel(cl)
 
+
 # Fit random forest models
 forest_models <- model_datasets %>% 
-  select(dataset, train) %>% 
-  mutate(fit_forest = map(train, cross_forest))
+  select(dataset, x_train, y_train) %>% 
+  mutate(fit_forest = map2(x_train, y_train, cross_fit, tuning = tuning_forest, method = "rf"))
 
 # Stop parallel computing
 stopCluster(cl)
@@ -1483,7 +1461,7 @@ best_forest <- forest_models %>%
   unnest(fit_forest) %>% 
   group_by(dataset) %>% 
   arrange(RMSE) %>% 
-  select(dataset, fit_forest) %>% 
+  select(dataset, fit) %>% 
   slice(1) %>% 
   ungroup()
 
@@ -1543,6 +1521,18 @@ randomForest::partialPlot(
 
 ```{r}
 
+# Tuning grid for boosted trees
+tune_boosted <- expand_grid(
+      nrounds = c(25, 50, 100, 200),
+      max_depth = seq(1, 9, 2),
+      eta = c(0.05, 0.1, 0.15, 0.2),
+      gamma = 0,
+      colsample_bytree = 1,
+      min_child_weight = 1,
+      subsample = 1
+      )  
+  
+
 # Extract function for xgb boosting fit
 cross_boost <- function(data) {
   
@@ -1583,6 +1573,12 @@ boosted_models <- model_datasets %>%
   select(dataset, train) %>% 
   mutate(
     fit_boost = map(train, cross_boost)
+  )
+
+boosted_models <- model_datasets %>% 
+  select(dataset, x_train, y_train) %>% 
+  mutate(
+    fit_boost = map2(x_train, y_train, cross_fit, tuning = tune_boosted, method = "xgbTree")
   )
 
 
