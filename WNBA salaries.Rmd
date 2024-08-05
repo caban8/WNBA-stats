@@ -11,6 +11,14 @@ output:
     toc_depth: 3
     toc_float: yes
 urlcolor: blue
+params:
+  log_transform: true
+  arrange_by:
+    label: "Performance metric to arrange the models by"
+    value: "Rsquared"
+    input: select
+    choices: ["RMSE", "MAE", "Rsquared"]
+  
 ---
 
 
@@ -1013,6 +1021,7 @@ Field goals, field goals attempts and points were the predictors with the highes
 
 
 
+
 ## Features modification
 
 
@@ -1032,10 +1041,31 @@ model.matrix(~ ., data = wnba_complete) %>%
 ```
 
 
+## General setup 
+
+
+
+### General parameters 
+
 ```{r}
+
+# Extract values from parameters
+log_transform <- params$log_transform # Add datasets with log transformed outcome
+arrange_metric <- params$arrange_by # Performance metric by which the models should be arranged
+
+# Arrange models by the metric of choice
+arrange_own <- function(data) {
+  if (arrange_metric == "Rsquared") {
+    arrange(data, desc(Rsquared))
+  } else {arrange(data, pick(arrange_metric))}
+}
 
 
 ```
+
+
+
+### Data separation
 
 
 ```{r}
@@ -1056,12 +1086,18 @@ model_datasets <- tibble(
 ```
 
 
+```{r eval=TRUE}
+
+model_datasets <-  model_datasets %>% 
+  rename(original = whole ) %>% 
+  mutate(log = map(original, function(x) {mutate(x, salary_adj = log(salary_adj))})) %>% 
+  pivot_longer(-dataset, names_to = "transformed", values_to = "whole") %>% 
+  mutate(dataset = str_c(dataset, "_", transformed)) %>% 
+  select(-transformed)
 
 
 
-
-## Data separation
-
+```
 
 
 ```{r}
@@ -1097,7 +1133,9 @@ model_datasets <- model_datasets %>%
 ```
 
 
-## General functions
+
+
+### Functions
 
 
 ```{r}
@@ -1212,7 +1250,7 @@ best_lm <- regsubsets_models2 %>%
 
 regsubsets_models2 %>% 
   select(dataset, id, method, RMSE, MAE, Rsquared) %>% 
-  arrange(RMSE) %>% 
+  arrange_own() %>% 
   kable2() 
 
 ```
@@ -1275,7 +1313,7 @@ best_lm3 <- best_lm2 %>%
 best_lm3 %>% 
   ggplot(aes(.resid)) +
   geom_histogram() +
-  facet_wrap(~dataset)
+  facet_wrap(~dataset, scales = "free")
 ```
 
 
@@ -1285,7 +1323,7 @@ best_lm3 %>%
   ggplot(aes(sample = .resid)) +
   geom_qq() +
   geom_qq_line() +
-  facet_wrap(~dataset)
+  facet_wrap(~dataset, scales = "free")
   
 
 
@@ -1299,11 +1337,11 @@ best_lm3 %>%
 
 ```{r}
 
-lm_models2 %>% 
+best_lm3 %>% 
   ggplot(aes(.fitted, .resid)) +
   geom_point() +
   geom_smooth(se = F) +
-  facet_wrap(~dataset)
+  facet_wrap(~dataset, scales = "free")
   
 
 ```
@@ -1364,7 +1402,7 @@ registerDoSEQ()
 # Extract best models
 best_lasso <- lasso_models %>% 
   group_by(dataset) %>% 
-  arrange(RMSE) %>% 
+  arrange_own() %>% 
   slice(1) %>% 
   select(dataset, lambda, fit) %>% 
   ungroup()
@@ -1372,7 +1410,7 @@ best_lasso <- lasso_models %>%
 
 lasso_models %>% 
   select(-c(fit, x_train, y_train)) %>% 
-  arrange(RMSE)
+  arrange_own() 
 
 
 
@@ -1480,7 +1518,7 @@ best_tree <- tree_models2 %>%
 ```{r}
 tree_models2 %>% 
   select(-fit) %>% 
-  arrange(RMSE) %>% 
+  arrange_own() %>% 
   kable2()
 
 ```
@@ -1547,7 +1585,7 @@ best_forest <- forest_models %>%
 forest_models %>% 
   unnest(fit_forest) %>% 
   select(dataset, mtry, RMSE, Rsquared, MAE) %>% 
-  arrange(RMSE)
+  arrange_own() 
 
 ```
 
@@ -1660,11 +1698,23 @@ registerDoSEQ()
 best_boosted <- boosted_models %>% 
   unnest(fit_boost) %>% 
   group_by(dataset) %>% 
-  arrange(RMSE) %>% 
+  arrange_own() %>% 
   select(dataset, fit) %>% 
   slice(1) %>% 
   ungroup()
 
+
+```
+
+
+
+```{r}
+
+boosted_models %>% 
+  select(dataset, fit_boost) %>% 
+  unnest(fit_boost) %>% 
+  select(dataset, eta, max_depth, nrounds, RMSE, MAE, Rsquared) %>% 
+  arrange_own()
 
 ```
 
@@ -1746,15 +1796,15 @@ best_tested <- best_boosted %>%
     ) %>% 
   mutate(
     predicted = map2(fit, test, predict),
-    rmse = map2_dbl(predicted, y_test, rmse_own),
-    mae = map2_dbl(predicted, y_test, mae_own),
-    r2 = map2_dbl(predicted, y_test, rsquare_own)
+    RMSE = map2_dbl(predicted, y_test, rmse_own),
+    MAE = map2_dbl(predicted, y_test, mae_own),
+    Rsquared = map2_dbl(predicted, y_test, rsquare_own)
   ) %>% 
-  arrange(rmse)
+  arrange_own()
 
 
 best_tested %>% 
-  select(dataset, fit_class, rmse, mae, r2) %>% 
+  select(dataset, fit_class, RMSE, MAE, Rsquared) %>% 
   kable2()
 
 ```
