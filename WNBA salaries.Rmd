@@ -42,7 +42,7 @@ knitr::opts_chunk$set(
 if(!require('pacman')) {install.packages('pacman')}
 
 # Load all libraries
-pacman::p_load(xgboost, DT, readxl,leaps,furrr, rstatix, broom, bestglm, glmnet, leaps, car,  pROC, caret, tree, rpart, randomForest, rpart.plot, doParallel, tidyverse)
+pacman::p_load(modelr, xgboost, DT, readxl,leaps,furrr, rstatix, broom, bestglm, glmnet, leaps, car,  pROC, caret, tree, rpart, randomForest, rpart.plot, doParallel, tidyverse)
 
 
 # Set up parallel backend
@@ -1408,6 +1408,7 @@ best_lasso <- lasso_models %>%
   ungroup()
 
 
+# Arrange lasso models in terms of the chosen performance metric
 lasso_models %>% 
   select(-c(fit, x_train, y_train)) %>% 
   arrange_own() 
@@ -1422,12 +1423,14 @@ lasso_models %>%
 
 ```{r}
 
+# extract coefficients of only the best lasso models
 best_lasso <- best_lasso %>% 
   mutate(
     coefs = map2(fit, lambda, ~coef(.x, s = .y)),
     coefs = map(coefs, ~as.data.frame.matrix(.) %>% rownames_to_column() )
     ) 
 
+# Fit linear models using only those predictors which coefficients weren't reduced to zero
 best_lasso_reduced <- best_lasso %>% 
   unnest(coefs) %>% 
   filter(s1 != 0, rowname != "(Intercept)") %>% 
@@ -1444,15 +1447,21 @@ best_lasso_reduced <- best_lasso %>%
   mutate(
     fit = map2(formula, train_dummy, ~lm(.x, .y))
   ) %>% 
-  select(dataset, fit) 
+  select(dataset, test_dummy, fit) 
 
 
+# Obtain model diagnostic statistics and performance metrics
 best_lasso_reduced2 <- best_lasso_reduced %>% 
   mutate(
+    RMSE = map2_dbl(fit, test_dummy,  rmse),
+    Rsquared = map2_dbl(fit, test_dummy,  rsquare),
+    MAE = map2_dbl(fit, test_dummy,  mae),
     map_df(fit, glance),
     vif = map(fit, vif),
+    vif_names = map(vif, names),
     augmented = map(fit, augment)
-    )
+    ) %>% 
+  arrange_own()
   
   
 
@@ -1462,16 +1471,124 @@ best_lasso_reduced2 <- best_lasso_reduced %>%
 ### Model diagnostics
 
 
-
 ```{r}
 
-best_lasso_reduced2$fit_lm[[2]] %>% 
-  plot()
+# Extract augmented statistics
+best_lasso_augmented <- best_lasso_reduced2 %>% 
+  select(dataset, augmented) %>% 
+  unnest(augmented)
 
 ```
 
 
+#### Normality assumption
 
+##### Histograms
+
+```{r}
+# Plot the histograms of the models' residuals
+best_lasso_augmented %>% 
+  ggplot(aes(.std.resid)) +
+  geom_histogram() +
+  facet_wrap(~dataset)
+
+
+```
+
+The histograms indicate that the distributions of the residuals of all models roughly conformed to the normal distribution.
+
+
+##### Q-Q plots
+
+
+```{r}
+# Obtain Q-Q plots of the models' residuals
+best_lasso_augmented %>% 
+  ggplot(aes(sample = .std.resid)) +
+  geom_qq() +
+  geom_qq_line() +
+  facet_wrap(~dataset)
+
+
+```
+
+
+Based on the Q-Q plots, it can be observed that the models fitted on the untransformed salary variable did not deviate significantly from the normal distribution.
+
+The case was somewhat different for the models fitted on the logarithmically transformed dependent variable, where moderate deviations were observed at the edges.
+
+
+#### Homoscedasticity assumption
+
+
+```{r}
+
+# Plot scatterplots of the predicted values against the residuals
+best_lasso_augmented %>% 
+  ggplot(aes(.fitted, .resid)) +
+  geom_point() +
+  facet_wrap(~dataset, scales = "free")
+
+```
+
+All models suffered from heteroscedasticity, although this was less prounced in the case of those which were fitted on the logarithmically transformed outcome.
+
+#### Multicollinearity
+
+```{r}
+best_lasso_vif <- best_lasso_reduced2 %>% 
+  select(dataset, vif, vif_names) %>% 
+  unnest() 
+
+best_lasso_vif %>% 
+  ggplot(aes(dataset, vif)) +
+  geom_point() +
+  geom_text(
+    aes(label = vif_names), 
+    data = filter(best_lasso_vif, vif >= 4),
+    )
+
+```
+
+Assuming the criterion of VIF > 4, All models were reported to have some degree of multicollinearity, with the field goals predictor achieving the highest multicollienarity in each of the models.
+
+
+
+#### Outliers and influential values
+
+##### Cook's distance
+
+```{r}
+
+# Add conditional variables indicating influential and outlier values 
+best_lasso_augmented <- best_lasso_augmented %>% 
+  mutate(Cook_high = if_else(.cooksd >= 1, T, F)) 
+
+# Plot cook's distance values
+best_lasso_augmented %>% 
+  ggplot(aes(dataset, .cooksd)) +
+  geom_jitter()
+  
+  
+
+```
+
+No influential values were observed.
+
+
+##### Outliers
+
+```{r}
+
+# Plot standardized residuals
+best_lasso_augmented %>% 
+  ggplot(aes(dataset, .std.resid)) +
+  geom_jitter()
+
+
+```
+
+No observations with a standardized residual greater than |x| > 3 were found.
 
 
 ## Tree models
@@ -1516,12 +1633,16 @@ best_tree <- tree_models2 %>%
 
 
 ```{r}
+# Arrange tree models from best to worst
 tree_models2 %>% 
   select(-fit) %>% 
   arrange_own() %>% 
   kable2()
 
 ```
+
+
+
 
 ### Tree leafs
 
