@@ -1019,6 +1019,12 @@ Field goals, field goals attempts and points were the predictors with the highes
 
 # Modelling
 
+```{r}
+# Set multisession for parallel computing for specific chunks of code
+plan(multisession, workers = num_cores)
+
+
+```
 
 
 
@@ -1177,6 +1183,7 @@ cross_fit <- function(x_data, y_data, tuning, method = "glmnet") {
 
 ## Linear models 
 
+Linear models will be fitted using a combination of forward and backward stepwise selections.
 
 
 ```{r}
@@ -1235,59 +1242,127 @@ regsubsets_models2 <- regsubsets_models %>%
   pivot_longer(c(fit_forward, fit_backward), names_to = "method", values_to =  "reg_model") %>% 
   unnest(id)  %>% 
   mutate(
-    lm = pmap(list(reg_model, id, train_dummy), subset_lm)
+    lm = pmap(list(reg_model, id, train_dummy), subset_lm),
   ) %>% 
   unnest(lm) %>% 
-  mutate(across(where(is.double), ~round(., 3)))
+  mutate(
+    across(where(is.double), ~round(., 3)),
+    predictors = id - 1
+    ) %>% 
+  arrange_own()
 
 # Select the best models
 best_lm <- regsubsets_models2 %>% 
   group_by(dataset) %>% 
-  arrange(RMSE) %>% 
   slice(1) %>% 
   select(dataset, fit) 
 
+# 10 best
+regsubsets_best10 <- regsubsets_models2 %>% 
+  select(dataset, predictors, method, RMSE, MAE, Rsquared) %>% 
+  slice(1:10) 
 
-regsubsets_models2 %>% 
-  select(dataset, id, method, RMSE, MAE, Rsquared) %>% 
-  arrange_own() %>% 
+regsubsets_best10 %>% 
   kable2() 
 
 ```
+
+#### Best 10 models
+
+Cross-validation revealed that the best 10 linear models explained between 
+`r min(regsubsets_best10$Rsquared)`
+`r max(regsubsets_best10$Rsquared)` proportion of the total variance,
+having between 
+`r min(regsubsets_best10$predictors)` and
+`r max(regsubsets_best10$predictors)` predictors.
+
+
+##### Performance against number of predictors
+
+
+```{r}
+# Plot scatterplots of number of variables against R-squared
+regsubsets_models2 %>% 
+  group_by(dataset) %>% 
+  mutate(best = Rsquared == max(Rsquared)) %>%
+  ggplot(aes(predictors, Rsquared, color = dataset, alpha = best)) +
+  geom_point() +
+  facet_wrap(~dataset)
+```
+The explanatory power of the linear models consistently increases up to around 10 predictors, after which the relationship plateaus.
+
+
+```{r}
+regsubsets_models2 %>% 
+  select(dataset, predictors, RMSE, MAE) %>% 
+  pivot_longer(c( RMSE, MAE), names_to = "Metric", values_to = "Performance") %>% 
+  group_by(dataset, Metric) %>% 
+  mutate(best = Performance == min(Performance)) %>% 
+  ggplot(aes(predictors, Performance, color = dataset, alpha = best)) +
+  geom_point() +
+  facet_grid(dataset ~ Metric, scales = "free")
+
+```
+
 
 
 ### Best models coefficients
 
 
-```{r}
 
+```{r}
 # Obtain coefficients, residuals and diagnostics
 best_lm2 <- best_lm %>% 
   mutate(
     coefs = map(fit, ~lm.beta::lm.beta(.) %>% tidy()),
     augmented = map(fit, augment),
-    vif = map(fit, vif)
+    vif = map(fit, vif),
+    vif_names = map(vif, names)
     )
 
 lm_coefs <- best_lm2 %>% 
   select(dataset, coefs) %>% 
   unnest() %>% 
   group_by(dataset) %>% 
-  arrange(desc(std_estimate))
-
-lm_coefs %>% 
-  filter(dataset == "full") %>% 
-  kable2()
-
-
+  arrange(desc(std_estimate)) %>% 
+  ungroup() %>% 
+  mutate(across(where(is.double), ~round(., 3))) %>% 
+  mutate(
+    std_estimate2 = if_else(
+      p.value <= 0.05, 
+      str_c(std_estimate, "*"), 
+      as.character(std_estimate) 
+    ),
+    significant = p.value <= 0.05
+  )
 ```
 
 
 ```{r}
 lm_coefs %>% 
-  filter(dataset == "reduced") %>% 
-  kable2()
+  ggplot(aes(std_estimate, term, color = dataset, alpha = significant)) +
+  geom_point(position = position_jitter(width = 0, height = 0.3)) 
+```
 
+
+```{r}
+lm_coefs %>% 
+  ggplot(aes(term, std_estimate, color = dataset)) +
+  geom_point() +
+  coord_flip() 
+
+```
+
+
+
+
+```{r}
+# Show standardized coefficients for all models in a table
+lm_coefs %>% 
+  select(dataset, term, std_estimate2) %>% 
+  pivot_wider(names_from = dataset, values_from = std_estimate2) %>% 
+  kable2()
+  
 
 
 ```
@@ -1299,12 +1374,8 @@ lm_coefs %>%
 
 #### Normality assumption
 
-```{r}
-best_lm2 <- best_lm2 %>% 
-  mutate(
-    augmented = map(fit, augment)
-  )
 
+```{r}
 best_lm3 <- best_lm2 %>% 
   unnest(augmented) %>% 
   select(-fit)
@@ -1350,28 +1421,67 @@ best_lm3 %>%
 
   
 ```{r}
-best_lm2$vif[[2]]
+best_lm2 
 ```
 
 
 ```{r}
+# Plot VIF 
 best_lm2 %>% 
-  select(dataset, vif) %>% 
-  unnest()
+  select(dataset, vif, vif_names) %>% 
+  unnest() %>% 
+  ggplot(aes(vif, vif_names, color = dataset)) +
+  geom_point(position = position_jitter(height = 0.3))
 
 ```
 
 
+#### Outliers and influential values
+
+##### Cook's distance
 
 ```{r}
-# regsubsets_models2
+
+# Add conditional variables indicating influential and outlier values 
+best_lm3 <- best_lm3 %>% 
+  mutate(Cook_high = if_else(.cooksd >= 1, T, F)) 
+
+# Plot cook's distance values
+best_lm3 %>% 
+  ggplot(aes(dataset, .cooksd)) +
+  geom_jitter()
+  
+  
+
 ```
+
+No influential values were observed.
+
+
+##### Outliers
+
+```{r}
+
+# Plot standardized residuals
+best_lm3 %>% 
+  ggplot(aes(dataset, .std.resid)) +
+  geom_jitter()
+
+
+```
+
+No observations with a standardized residual greater than |x| > 3 were found.
+
+
+#### Summary 
+
+
+
 
 ## Lasso models
 
 
 ```{r}
-
 set.seed(123)
 
 
@@ -1393,7 +1503,8 @@ lasso_models <- model_datasets %>%
   mutate(
     fit_lasso = map2(x_train, y_train, cross_fit, tuning = tune_lasso),
     ) %>% 
-  unnest(fit_lasso) 
+  unnest(fit_lasso) %>% 
+  arrange_own() 
 
 # Stop parallel computing
 stopCluster(cl)
@@ -1402,21 +1513,37 @@ registerDoSEQ()
 # Extract best models
 best_lasso <- lasso_models %>% 
   group_by(dataset) %>% 
-  arrange_own() %>% 
   slice(1) %>% 
   select(dataset, lambda, fit) %>% 
   ungroup()
+```
 
+
+#### Best 10 models
+
+
+```{r}
+
+# Extract the best 10 models
+best_lasso10 <- lasso_models %>% 
+  slice(1:10)
 
 # Arrange lasso models in terms of the chosen performance metric
-lasso_models %>% 
-  select(-c(fit, x_train, y_train)) %>% 
-  arrange_own() 
+best_lasso10 %>% 
+  select(-c(fit, x_train, y_train)) 
 
 
 
 ```
 
+
+
+Cross-validation revealed that the best 10 linear models explained between 
+`r min(best_lasso10$Rsquared)`
+`r max(best_lasso10$Rsquared)` proportion of the total variance,
+with lambda values being between
+`r min(best_lasso10$lambda)` and
+`r max(best_lasso10$lambda)` predictors.
 
 
 
@@ -1527,6 +1654,7 @@ The case was somewhat different for the models fitted on the logarithmically tra
 best_lasso_augmented %>% 
   ggplot(aes(.fitted, .resid)) +
   geom_point() +
+  geom_smooth(se = F) +
   facet_wrap(~dataset, scales = "free")
 
 ```
@@ -1540,13 +1668,13 @@ best_lasso_vif <- best_lasso_reduced2 %>%
   select(dataset, vif, vif_names) %>% 
   unnest() 
 
+
+
+# Plot VIF of the best lasso models
 best_lasso_vif %>% 
-  ggplot(aes(dataset, vif)) +
-  geom_point() +
-  geom_text(
-    aes(label = vif_names), 
-    data = filter(best_lasso_vif, vif >= 4),
-    )
+  unnest() %>% 
+  ggplot(aes(vif, vif_names, color = dataset)) +
+  geom_point(position = position_jitter(height = 0.3))
 
 ```
 
@@ -1591,12 +1719,12 @@ best_lasso_augmented %>%
 No observations with a standardized residual greater than |x| > 3 were found.
 
 
+#### Summary 
+
 ## Tree models
 
 
 ```{r}
-# Set multisession for parallel computing for specific chunks of code
-plan(multisession, workers = num_cores)
 
 
 # Set up tuning grid for tree models
