@@ -70,10 +70,10 @@ kable2 <- function(x) {
 
 # Plot color palette 
 colors <- c(
-  "#6C946F",
-  "#FFD35A",
-  "#FFA823",
-  "#DC0083"
+ "#FFBE98",
+ "#F05A7E",
+ "#125B9A",
+ "#0B8494"
 )
 
 
@@ -319,6 +319,11 @@ As expected, the salaries for all years expect for the current (base) year incre
 # Import codebook
 codebook <- read_excel("codebook.xlsx") %>% 
   select(-1)
+
+codebook <- codebook %>% 
+  arrange(variable) 
+
+view(codebook)
 
 # List player stats datasets for all years
 stats_files <- list.files("players stats")
@@ -1019,20 +1024,13 @@ Field goals, field goals attempts and points were the predictors with the highes
 
 # Modelling
 
-```{r}
-# Set multisession for parallel computing for specific chunks of code
-plan(multisession, workers = num_cores)
-
-
-```
-
 
 
 ## Features modification
 
 
 ```{r}
-# Rename variables to make  them comptabile with all modelling functions
+# Rename variables to make  them compatible with all modelling functions
 wnba_complete <-  wnba_complete %>% 
   rename_with(~str_replace_all(., "2", "Two_")) %>% 
   rename_with(~str_replace_all(., "3", "Three_")) %>% 
@@ -1255,7 +1253,8 @@ regsubsets_models2 <- regsubsets_models %>%
 best_lm <- regsubsets_models2 %>% 
   group_by(dataset) %>% 
   slice(1) %>% 
-  select(dataset, fit) 
+  select(dataset, fit) %>% 
+  ungroup()
 
 # 10 best
 regsubsets_best10 <- regsubsets_models2 %>% 
@@ -1344,16 +1343,11 @@ lm_coefs %>%
   geom_point(position = position_jitter(width = 0, height = 0.3)) 
 ```
 
+Regardless of the model, field goals, year, and number of games were the strongest predictors of a WNBA player's salary.
 
-```{r}
-lm_coefs %>% 
-  ggplot(aes(term, std_estimate, color = dataset)) +
-  geom_point() +
-  coord_flip() 
+The more field goals a player had, the better her salary was. Interestingly, the reverse was true for the number of games. Salaries were visibly higher from 2019 to 2022 than in 2017 and 2018 with a stabilization being achieved beginning with 2019.
 
-```
-
-
+Additionally, the number of minutes on the field was an important predictor in models with the log-transformed outcome.
 
 
 ```{r}
@@ -1401,6 +1395,7 @@ best_lm3 %>%
 
 ```
 
+Judging by histograms and Q-Q plots, a slight deviation from normality can be observed, with more observations at the tails. However, this slight deviation should not significantly affect the estimation of the coefficients."
 
 #### Homoscedasticity assumption
 
@@ -1417,12 +1412,14 @@ best_lm3 %>%
 
 ```
 
+The models fitted to the untransformed data suffered from heteroscedasticity, with a lower error variance at the smaller predicted values. 
+This was somewhat, but not entirely, corrected in the models with the log-transformed outcome.
+Moreover, all models displayed non-linearity.
+
+
 #### Multicollinearity
 
-  
-```{r}
-best_lm2 
-```
+
 
 
 ```{r}
@@ -1434,6 +1431,14 @@ best_lm2 %>%
   geom_point(position = position_jitter(height = 0.3))
 
 ```
+
+Each of the four best models reported extremely high correlations for the same two predictors:
+-   FG (Field goals)
+-   FGA (Field goals attempts)
+
+This is in line with the correlation analyses, which revealed that the two predictors had the highest count of correlation above |0.8| with the remaining predictors.
+
+Additionally, models fitted to the datasets with the logarithmitized outcome, reported a high correlation for Minutes, while models fitted to the datasets with the untransformed outcome had a high correlation for TRB (Total Rebounds).
 
 
 #### Outliers and influential values
@@ -1475,7 +1480,8 @@ No observations with a standardized residual greater than |x| > 3 were found.
 
 #### Summary 
 
-
+Even though the best linear models explained a substantial proportion of the outcome's variance, they suffered from moderate heteroscedasticity and, even more importantly, they displayed non-linearity and some of their predictors had a very high VIF. 
+All this means that the estimated coefficients are not reliable making the models less trust-worthy.
 
 
 ## Lasso models
@@ -1546,6 +1552,39 @@ with lambda values being between
 `r max(best_lasso10$lambda)` predictors.
 
 
+
+
+
+##### Performance against lambda
+
+
+```{r}
+# Plot scatterplots of number of variables against R-squared
+lasso_models  %>% 
+  group_by(dataset) %>% 
+  mutate(best = Rsquared == max(Rsquared)) %>%
+  ggplot(aes(lambda, Rsquared, color = dataset, alpha = best)) +
+  geom_point() +
+  facet_wrap(~dataset, scales = "free")
+```
+The explanatory power of the linear models consistently increases up to around 10 predictors, after which the relationship plateaus.
+
+
+```{r}
+regsubsets_models2 %>% 
+  select(dataset, predictors, RMSE, MAE) %>% 
+  pivot_longer(c( RMSE, MAE), names_to = "Metric", values_to = "Performance") %>% 
+  group_by(dataset, Metric) %>% 
+  mutate(best = Performance == min(Performance)) %>% 
+  ggplot(aes(predictors, Performance, color = dataset, alpha = best)) +
+  geom_point() +
+  facet_grid(dataset ~ Metric, scales = "free")
+
+```
+
+
+
+#### Best models' coefficients
 
 
 ```{r}
@@ -1769,6 +1808,19 @@ tree_models2 %>%
 
 ```
 
+
+
+
+```{r}
+
+tree_models2 %>% 
+  select(-fit) %>% 
+  ggplot(aes(cp, Rsquared, color = dataset)) +
+  geom_point() +
+  facet_wrap(~dataset, scales = "free")
+  
+
+```
 
 
 
