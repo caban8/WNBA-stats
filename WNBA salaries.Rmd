@@ -1562,21 +1562,21 @@ with lambda values being between
 # Plot scatterplots of number of variables against R-squared
 lasso_models  %>% 
   group_by(dataset) %>% 
-  mutate(best = Rsquared == max(Rsquared)) %>%
-  ggplot(aes(lambda, Rsquared, color = dataset, alpha = best)) +
+  mutate(best = Rsquared == max(Rsquared, na.rm = T)) %>%
+  ggplot(aes(lambda, Rsquared, color = dataset, alpha = best, shape = best)) +
   geom_point() +
   facet_wrap(~dataset, scales = "free")
 ```
-The explanatory power of the linear models consistently increases up to around 10 predictors, after which the relationship plateaus.
+
 
 
 ```{r}
-regsubsets_models2 %>% 
-  select(dataset, predictors, RMSE, MAE) %>% 
+lasso_models %>% 
+  select(dataset, lambda, RMSE, MAE) %>% 
   pivot_longer(c( RMSE, MAE), names_to = "Metric", values_to = "Performance") %>% 
   group_by(dataset, Metric) %>% 
   mutate(best = Performance == min(Performance)) %>% 
-  ggplot(aes(predictors, Performance, color = dataset, alpha = best)) +
+  ggplot(aes(lambda, Performance, color = dataset, alpha = best, shape = best)) +
   geom_point() +
   facet_grid(dataset ~ Metric, scales = "free")
 
@@ -1813,15 +1813,70 @@ tree_models2 %>%
 
 ```{r}
 
+
+
+# Plot R-squared of the models
 tree_models2 %>% 
   select(-fit) %>% 
-  ggplot(aes(cp, Rsquared, color = dataset)) +
+  group_by(dataset) %>% 
+  mutate(best = Rsquared == max(Rsquared, na.rm = T)) %>% 
+  ungroup() %>% 
+  ggplot(aes(cp, Rsquared, color = dataset, alpha = best)) +
   geom_point() +
   facet_wrap(~dataset, scales = "free")
-  
+```
+
+
+```{r}
+
+tree_models2 %>% 
+  select(-fit) %>% 
+  pivot_longer(
+    cols = c(RMSE, MAE),
+    values_to = "Performance",
+    names_to = "Metric"
+    ) %>% 
+  group_by(dataset, Metric) %>% 
+  mutate(best = Performance == min(Performance, na.rm = T)) %>% 
+  ungroup() %>% 
+  ggplot(aes(cp, Performance, color = dataset, alpha = best, shape = best)) +
+  geom_point() +
+  facet_grid(dataset ~ Metric, scales = "free")
 
 ```
 
+Generally speaking, the tree models with a complexity parameter smaller than 0.1 performed better on the cross-validation prediction.
+
+### Predictors
+
+
+```{r}
+
+# Function to extract predictors and their importance from the final tree
+rpart_predictors <- function(fit) {
+  
+  # Extract names of the fitted predictors
+  predictors <- fit$frame$var %>% 
+    keep(~. != "<leaf>")
+  
+  fit$variable.importance %>% 
+    keep_at(~. %in% predictors)
+  
+  
+}
+
+# Plot predictors importance
+best_tree %>% 
+  mutate(
+    importance = map(fit, rpart_predictors),
+    importance_names = map(importance, names)
+  ) %>%  
+  unnest(cols = -fit) %>% 
+  ggplot(aes(y = importance_names, x = importance, color = dataset)) +
+  geom_point(position = position_jitter(width = 0.2, height = 0.2))
+
+
+```
 
 
 ### Tree leafs
@@ -1830,7 +1885,7 @@ tree_models2 %>%
 ```{r}
 
 
-rpart.plot(best_tree$fit[[1]] )
+rpart.plot(best_tree$fit[[1]])
 
 
 
@@ -1843,7 +1898,9 @@ rpart.plot(best_tree$fit[[2]] )
 
 ```
 
+### Summary
 
+Overall, the tree models performed noticeably worse in comparison to the linear models. 
 
 
 ## Random forest
