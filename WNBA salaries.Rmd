@@ -13,6 +13,7 @@ output:
 urlcolor: blue
 params:
   log_transform: true
+  evaluate_chunks: false
   arrange_by:
     label: "Performance metric to arrange the models by"
     value: "Rsquared"
@@ -46,7 +47,7 @@ pacman::p_load(modelr, xgboost, DT, readxl,leaps,furrr, rstatix, broom, bestglm,
 
 
 # Set up parallel backend
-num_cores <- detectCores() - 2
+num_cores <- detectCores() - 1
 
 ```
 
@@ -1108,7 +1109,9 @@ model_datasets <-  model_datasets %>%
 
 
 
+# Set seed
 set.seed(123)
+
 
 # Set up k-indexing
 indices <- sample(1:2, nrow(wnba_complete), prob = c(0.8, 0.2), replace = T)
@@ -1159,11 +1162,11 @@ extract_caret <- function(model) {
 }
 
 
-cross_fit <- function(x_data, y_data, tuning, method = "glmnet") {
+cross_fit <- function(x_data, y_data, ..., tuning, method = "glmnet") {
   
   # train cross-validation models
   model <- train(
-    x_data, y_data,
+    x_data, y_data, ...,
     method = method,
     tuneGrid = tuning,
     trControl = trainControl(method = "cv", number = 10)
@@ -1223,6 +1226,8 @@ subset_lm <- function(regsubset, id, data) {
   
 }
 
+# Set seed
+set.seed(123)
 
 regsubsets_models <- model_datasets %>% 
   select(dataset, train, train_dummy, test_dummy) %>% 
@@ -1488,7 +1493,9 @@ All this means that the estimated coefficients are not reliable making the model
 
 
 ```{r}
+# Set seed
 set.seed(123)
+
 
 
 # Create search grid for lambda parameter in lasso
@@ -1764,6 +1771,8 @@ No observations with a standardized residual greater than |x| > 3 were found.
 
 
 ```{r}
+# Set seed
+set.seed(123)
 
 
 # Set up tuning grid for tree models
@@ -1908,8 +1917,14 @@ Overall, the tree models performed noticeably worse in comparison to the linear 
 
 ```{r}
 # Tuning grid for random forest
-tuning_forest <- data.frame(mtry = seq(2, ncol(model_full), 2)) 
+tuning_forest <- data.frame(mtry = seq(2, ncol(model_full), 2))
+```
 
+
+```{r eval=params$evaluate_chunks}
+
+# Set seed
+set.seed(123)
 
 
 # Start parallel computing
@@ -1917,20 +1932,52 @@ cl <- makeCluster(num_cores)
 registerDoParallel(cl)
 
 
+
+
 # Fit random forest models
 forest_models <- model_datasets %>% 
-  select(dataset, x_train, y_train) %>% 
-  mutate(fit_forest = map2(x_train, y_train, cross_fit, tuning = tuning_forest, method = "rf"))
+  expand_grid(ntree = c(100, 150, 200, 250, 300, 400, 500, 800, 1000)) %>% 
+  select(dataset, x_train, y_train, ntree) %>% 
+  mutate(fit_forest = pmap(
+    list(x_data = x_train, y_data = y_train, ... = ntree), 
+    cross_fit, 
+    tuning = tuning_forest, 
+    method = "rf")
+    )
+
+forest_models2 <- forest_models 
 
 # Stop parallel computing
 stopCluster(cl)
 registerDoSEQ()
+```
 
+
+```{r eval=params$evaluate_chunks}
+# Export random forest object to avoid long processing time
+forest_models2 %>% 
+  save(file = "Random Forest models.Rdata")
+
+```
+
+
+
+```{r}
+
+load("Random Forest models.Rdata")
+
+forest_models2 <- forest_models
+
+```
+
+
+
+```{r}
 # Extract best models 
 best_forest <- forest_models %>% 
   unnest(fit_forest) %>% 
   group_by(dataset) %>% 
-  arrange(RMSE) %>% 
+  arrange_own() %>% 
   select(dataset, fit) %>% 
   slice(1) %>% 
   ungroup()
@@ -1940,13 +1987,101 @@ best_forest <- forest_models %>%
 
 ```{r}
 
-forest_models %>% 
+# Extract model performance metrics by ntree and mtry
+forest_fitted <- forest_models %>% 
   unnest(fit_forest) %>% 
-  select(dataset, mtry, RMSE, Rsquared, MAE) %>% 
+  select(dataset, ntree, mtry, RMSE, Rsquared, MAE) %>% 
   arrange_own() 
+
+# Best 10 forest models
+best_forest10 <- forest_fitted %>% 
+  slice(1:10)
+
+# Show all models
+forest_fitted %>% 
+  kable2()
+
+```
+Cross-validation revealed that the best 10 random forest models explained between 
+`r min(best_forest10$Rsquared)`
+`r max(best_forest10$Rsquared)` proportion of the total variance,
+with mtry being between
+`r min(best_forest10$mtry)` and
+`r max(best_forest10$mtry)` predictors.
+
+Except for one model, the preferable number of trees for growing were between 100 and 150.
+
+
+
+
+
+
+
+```{r}
+
+# Add information about best fit for each model type based on R2
+forest_rsquared <- forest_fitted %>% 
+  group_by(dataset) %>% 
+  mutate(best = Rsquared == max(Rsquared)) %>% 
+  ungroup() 
+
+# Compare tuning parameters in terms of R-squared on a heatmap
+forest_rsquared %>% 
+  ggplot(aes(mtry, factor(ntree))) +
+  geom_tile(aes(fill = Rsquared)) +
+  geom_point(data = filter(forest_rsquared, best), color = "red") +
+  facet_wrap(~dataset, scales = "free") +
+  labs(y = "Number of trees to grow",x = "Number of variables randomly sampled")
 
 ```
 
+
+Overall, models with a higher number of `mtry` were associated with a higher R-squared. 
+A more pronounced difference was observered for number of trees used in random forest fitting. 
+
+
+```{r}
+
+# Add information about best fit for each model type based on R2
+forest_performance <- forest_fitted %>% 
+  pivot_longer(cols = c(RMSE, MAE), names_to = "Metric", values_to = "Performance") %>% 
+  group_by(dataset, Metric) %>% 
+  mutate(
+    best = Performance == min(Performance),
+    transformed = str_detect(dataset, "log")
+    ) %>% 
+  ungroup() %>% 
+  nest(.by = c(Metric, transformed)) 
+  
+
+
+
+
+# Create list for all plots
+plot_list <- list()
+
+
+# Creat heatmaps for each metric and separately for transformed and untrasformed datasets
+for (i in 1:nrow(forest_performance)) {
+  
+  plot_list[[i]] <-  forest_performance$data[[i]] %>% 
+    # filter(str_detect(dataset, "original"), Metric == "RMSE") %>% 
+    ggplot(aes(mtry, factor(ntree))) +
+    geom_tile(aes(fill = Performance)) +
+    geom_point(data = filter(forest_performance$data[[i]], best), color = "red") +
+    facet_wrap(~dataset, scales = "free") +
+    labs(y = "Number of trees to grow",x = "Number of variables randomly sampled")
+}
+
+```
+
+
+
+```{r}
+
+plot_list
+
+```
 
 
 ### Predictors importance
@@ -1990,6 +2125,10 @@ randomForest::partialPlot(
 ## Boosted tree
 
 ```{r}
+
+# Set seed
+set.seed(123)
+
 
 # Tuning grid for boosted trees
 tune_boosted <- expand_grid(
@@ -2068,7 +2207,7 @@ best_boosted <- boosted_models %>%
 
 ```{r}
 
-boosted_models %>% 
+boosted_models2 <- boosted_models %>% 
   select(dataset, fit_boost) %>% 
   unnest(fit_boost) %>% 
   select(dataset, eta, max_depth, nrounds, RMSE, MAE, Rsquared) %>% 
@@ -2077,8 +2216,33 @@ boosted_models %>%
 ```
 
 
+### Plot
 
 ```{r}
+boosted_rsquared <- boosted_models2 %>% 
+  mutate(
+    eta_nround = interaction(eta, nrounds)
+  ) %>% 
+  group_by(dataset) %>% 
+  mutate(best = Rsquared == max(Rsquared)) %>% 
+  ungroup() 
+
+# Compare tuning parameters in terms of R-squared on a heatmap
+boosted_rsquared %>% 
+  ggplot(aes(max_depth, eta_nround)) +
+  geom_tile(aes(fill = Rsquared)) +
+  geom_point(data = filter(boosted_rsquared, best), color = "red") +
+  facet_wrap(~dataset, scales = "free") +
+  labs(y = "Number of trees to grow",x = "Number of variables randomly sampled")
+  
+  
+```
+
+### Variable importance
+
+```{r}
+
+best_boosted$fit
 
 best_boosted %>% 
   mutate(importance = map(fit, xgb.importance))
@@ -2141,6 +2305,10 @@ rsquare_own <- function(predicted, true_y) {
 ## Fit models onto test dataset
 
 ```{r}
+
+# Remove unnecesary columns for best models mering
+best_lasso_reduced <- best_lasso_reduced %>% 
+  select(-test_dummy)
 
 best_tested <- best_boosted %>% 
   add_row(best_forest) %>% 
