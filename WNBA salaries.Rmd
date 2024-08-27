@@ -2229,36 +2229,7 @@ tune_boosted <- expand_grid(
       subsample = 1
       )  
   
-
-# Extract function for xgb boosting fit
-cross_boost <- function(data) {
   
-  # Create search grid for mtry parameter
-  tune_grid <- expand_grid(
-      nrounds = c(25, 50, 100, 200),
-      max_depth = seq(1, 9, 2),
-      eta = c(0.05, 0.1, 0.15, 0.2),
-      gamma = 0,
-      colsample_bytree = 1,
-      min_child_weight = 1,
-      subsample = 1
-      )  
-  
-  
-  # train cross-validation models
-  model <- train(
-    general_formula,
-    data = data,
-    method = "xgbTree",
-    trControl = trainControl(method = "cv", number = 10),
-    tuneGrid = tune_grid
-    )
-  
-  model$results %>% 
-    select(nrounds, max_depth, eta, RMSE, Rsquared, MAE) %>% 
-    as_tibble() %>% 
-    mutate(fit_boost = list(model$finalModel))
-}  
 
 
 # Set up parallel computing
