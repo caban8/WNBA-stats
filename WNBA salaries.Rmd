@@ -2213,7 +2213,6 @@ best_forest2 %>%
 ## Boosted tree
 
 ```{r}
-
 # Set seed
 set.seed(123)
 
@@ -2248,9 +2247,11 @@ boosted_models <- model_datasets %>%
 # Stop parallem computing
 stopCluster(cl)
 registerDoSEQ()
+```
 
 
-
+```{r}
+# Extract best boosted models
 best_boosted <- boosted_models %>% 
   unnest(fit_boost) %>% 
   group_by(dataset) %>% 
@@ -2266,11 +2267,16 @@ best_boosted <- boosted_models %>%
 
 ```{r}
 
+# Extract performance metrics for all boosted models
 boosted_models2 <- boosted_models %>% 
   select(dataset, fit_boost) %>% 
   unnest(fit_boost) %>% 
   select(dataset, eta, max_depth, nrounds, RMSE, MAE, Rsquared) %>% 
   arrange_own()
+
+# Show all boosted models in a table
+boosted_models2 %>% 
+  kable2()
 
 ```
 
@@ -2301,14 +2307,33 @@ boosted_rsquared %>%
 
 ```{r}
 
-best_boosted$fit
 
+# Plot importance of all predictors for the best model for each dataset type
 best_boosted %>% 
-  mutate(importance = map(fit, xgb.importance))
+  mutate(importance = map(fit, ~xgb.importance(model = .x))) %>% 
+  select(-fit) %>% 
+  unnest(importance) %>% 
+  pivot_longer(-c(dataset, Feature), names_to = "type") %>% 
+  ggplot(aes(y = Feature, x = value, color = dataset)) +
+  geom_point() +
+  facet_wrap(~type, scales = "free_x")
   
 
 ```
 
+
+
+```{r}
+
+best_boosted %>% 
+  mutate(
+    plot_Games = map(fit, xgboost::xgb.plot.deepness)
+  )
+
+
+xgboost::xgb.plot.shap(model = best_boosted$fit[[1]])
+
+```
 
 
 
@@ -2369,6 +2394,7 @@ rsquare_own <- function(predicted, true_y) {
 best_lasso_reduced <- best_lasso_reduced %>% 
   select(-test_dummy)
 
+# Compare the best sets of models for all model types on the test dataset
 best_tested <- best_boosted %>% 
   add_row(best_forest) %>% 
   add_row(best_lasso_reduced) %>% 
@@ -2387,10 +2413,24 @@ best_tested <- best_boosted %>%
   ) %>% 
   arrange_own()
 
+# Extract only performance metrics
+best_tested2 <- best_tested %>% 
+  select(dataset, fit_class, RMSE, MAE, Rsquared)
 
-best_tested %>% 
+# Show the model comparison in a table
+best_tested2 %>% 
   select(dataset, fit_class, RMSE, MAE, Rsquared) %>% 
   kable2()
+
+```
+
+
+
+```{r}
+
+best_tested2 %>% 
+  ggplot(aes(dataset, fit_class, fill = Rsquared)) +
+  geom_tile()
 
 ```
 
