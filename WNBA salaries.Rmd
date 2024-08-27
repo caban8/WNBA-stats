@@ -1097,8 +1097,16 @@ model_datasets <-  model_datasets %>%
   rename(original = whole ) %>% 
   mutate(log = map(original, function(x) {mutate(x, salary_adj = log(salary_adj))})) %>% 
   pivot_longer(-dataset, names_to = "transformed", values_to = "whole") %>% 
-  mutate(dataset = str_c(dataset, "_", transformed)) %>% 
-  select(-transformed)
+  mutate(
+    dataset = str_c(dataset, "_", transformed),
+    dataset = factor(dataset, levels = c(
+      "full_original", 
+      "reduced_original", 
+      "full_log", 
+      "reduced_log"
+    ))
+    ) %>% 
+  select(-transformed) 
 
 
 
@@ -1922,7 +1930,6 @@ tuning_forest <- data.frame(mtry = seq(2, ncol(model_full), 2))
 
 
 ```{r eval=params$evaluate_chunks}
-
 # Set seed
 set.seed(123)
 
@@ -1945,7 +1952,7 @@ forest_models <- model_datasets %>%
     method = "rf")
     )
 
-forest_models2 <- forest_models 
+# forest_models2 <- forest_models 
 
 # Stop parallel computing
 stopCluster(cl)
@@ -1955,8 +1962,7 @@ registerDoSEQ()
 
 ```{r eval=params$evaluate_chunks}
 # Export random forest object to avoid long processing time
-forest_models2 %>% 
-  save(file = "Random Forest models.Rdata")
+save(forest_models, file = "forest_models.RData")
 
 ```
 
@@ -1964,16 +1970,17 @@ forest_models2 %>%
 
 ```{r}
 
-load("Random Forest models.Rdata")
+load("forest_models.RData")
 
-forest_models2 <- forest_models
+
+
 
 ```
 
-
+### Random forest models ranking
 
 ```{r}
-# Extract best models 
+# Extract best forest models for each dataset type
 best_forest <- forest_models %>% 
   unnest(fit_forest) %>% 
   group_by(dataset) %>% 
@@ -2013,9 +2020,7 @@ Except for one model, the preferable number of trees for growing were between 10
 
 
 
-
-
-
+#### Compare random forest models in terms of r2
 
 ```{r}
 
@@ -2025,20 +2030,21 @@ forest_rsquared <- forest_fitted %>%
   mutate(best = Rsquared == max(Rsquared)) %>% 
   ungroup() 
 
-# Compare tuning parameters in terms of R-squared on a heatmap
+# Compare tuning parameters in terms of the R-squared on a heatmap
 forest_rsquared %>% 
   ggplot(aes(mtry, factor(ntree))) +
   geom_tile(aes(fill = Rsquared)) +
   geom_point(data = filter(forest_rsquared, best), color = "red") +
   facet_wrap(~dataset, scales = "free") +
-  labs(y = "Number of trees to grow",x = "Number of variables randomly sampled")
+  labs(y = "Number of trees to grow",x = "Number of variables randomly sampled") +
+  theme(legend.position = "top")
 
 ```
 
 
-Overall, models with a higher number of `mtry` were associated with a higher R-squared. 
-A more pronounced difference was observered for number of trees used in random forest fitting. 
+Overall, models with higher mtry values were associated with a higher R-squared. A more pronounced difference was observed for the number of trees parameter.
 
+#### Compare random forest models in terms of RMSE and MAE
 
 ```{r}
 
@@ -2048,7 +2054,7 @@ forest_performance <- forest_fitted %>%
   group_by(dataset, Metric) %>% 
   mutate(
     best = Performance == min(Performance),
-    transformed = str_detect(dataset, "log")
+    transformed = if_else(str_detect(dataset, "log"), "Untransformed", "Transformed")
     ) %>% 
   ungroup() %>% 
   nest(.by = c(Metric, transformed)) 
@@ -2058,19 +2064,25 @@ forest_performance <- forest_fitted %>%
 
 
 # Create list for all plots
-plot_list <- list()
+plots_forest <- list()
 
 
 # Creat heatmaps for each metric and separately for transformed and untrasformed datasets
 for (i in 1:nrow(forest_performance)) {
   
-  plot_list[[i]] <-  forest_performance$data[[i]] %>% 
+  plots_forest[[i]] <-  forest_performance$data[[i]] %>% 
     # filter(str_detect(dataset, "original"), Metric == "RMSE") %>% 
     ggplot(aes(mtry, factor(ntree))) +
     geom_tile(aes(fill = Performance)) +
     geom_point(data = filter(forest_performance$data[[i]], best), color = "red") +
     facet_wrap(~dataset, scales = "free") +
-    labs(y = "Number of trees to grow",x = "Number of variables randomly sampled")
+    labs(
+      y = "Number of trees to grow",
+      x = "Number of variables randomly sampled",
+      title = str_c(
+        "Comparison of ", forest_performance$transformed[[i]], " models in terms of ", forest_performance$Metric[[i]]
+        )
+      )
 }
 
 ```
@@ -2078,8 +2090,14 @@ for (i in 1:nrow(forest_performance)) {
 
 
 ```{r}
+# Compare transformed models in terms of RMSE and MAE
+cowplot::plot_grid(plots_forest[[1]], plots_forest[[2]], nrow = 2)
+```
 
-plot_list
+
+```{r}
+# Compare transformed models in terms of RMSE and MAE
+cowplot::plot_grid(plots_forest[[3]], plots_forest[[4]], nrow = 2)
 
 ```
 
@@ -2089,7 +2107,7 @@ plot_list
 
 ```{r}
 
-
+# Extract predictors' importance for each model
 best_forest2 <- best_forest %>% 
   mutate(
     importance_purity = map(fit, ~importance(.) %>% as.data.frame() %>% rownames_to_column())
@@ -2100,12 +2118,25 @@ best_forest2 <- best_forest %>%
 
 
 ```{r}
-
-
+# Plot predictors importance values for the untransformed datasets
 best_forest2 %>% 
   select(dataset, importance_purity) %>% 
   unnest() %>% 
-  arrange(dataset, desc(IncNodePurity)) 
+  filter(str_detect(dataset, "original")) %>% 
+  ggplot(aes(y = rowname, x = IncNodePurity, color = dataset)) +
+  geom_point()
+```
+Interestingly, the random forest models revealed games and games started as the most important predictors.
+Less important, but still noticeable predictors, were field goals, personal fouls, points and 2-Point Field Goals.
+
+```{r}
+# Plot predictors importance values for the transformed datasets
+best_forest2 %>% 
+  select(dataset, importance_purity) %>% 
+  unnest() %>% 
+  filter(str_detect(dataset, "log")) %>% 
+  ggplot(aes(y = rowname, x = IncNodePurity, color = dataset)) +
+  geom_point() 
 
 ```
 
@@ -2113,14 +2144,84 @@ best_forest2 %>%
 
 
 ```{r}
-
 randomForest::partialPlot(
   best_forest$fit[[2]], 
-  x.var = FG, 
+  x.var = Games, 
   pred.data = model_datasets$x_train[[2]]
-  ) 
+  )
+```
+
+
+```{r include=FALSE}
+# Create a function for extracting y and x values from a partial plot object
+extract_partial <- function(partial_data) {
+
+  
+  
+  # Return the partial data as a data frame
+  tibble(
+    predictor = partial_data$x, 
+    salary = partial_data$y
+    )
+}
+
+
+
+partialPlot(best_forest$fit[[1]], model_datasets$x_train[[1]], "Games") %>% 
+  extract_partial()
+```
+
+
+```{r include=FALSE}
+
+# Enable parallel computing
+plan(multisession)
+
+
+# Extract partial predictions for most important predictors
+best_forest2 <- best_forest %>% 
+  left_join(model_datasets) %>% 
+  mutate(
+    plots_Games = future_map2(fit, x_train, partialPlot, x.var = "Games", plot = FALSE),
+    plots_GS = future_map2(fit, x_train, partialPlot, x.var = "GS", plot = FALSE),
+    plots_FG = future_map2(fit, x_train, partialPlot, x.var = "FG", plot = FALSE),
+    plots_PTS = future_map2(fit, x_train, partialPlot, x.var = "PTS", plot = FALSE)
+  ) %>% 
+  select(dataset, starts_with("plots")) %>% 
+  pivot_longer(-dataset, names_to = "predictor_name", values_to = "partial_predictions") %>% 
+  mutate(
+    predictor_name = str_replace(predictor_name, "plots_", ""),
+    partial_predictions = future_map(partial_predictions, extract_partial)
+    ) 
+
+plan(sequential)
 
 ```
+
+
+
+```{r include=FALSE}
+
+
+
+best_forest2 %>% 
+  unnest() %>% 
+  mutate(salary = if_else(str_detect(dataset, "log"), exp(salary), salary)) %>% 
+  ggplot(aes(predictor, salary, color = dataset, group = dataset)) +
+  geom_line() +
+  facet_wrap(~predictor_name, scales = "free")
+
+
+```
+
+
+```{r}
+best_forest2 %>% 
+  unnest() 
+  
+
+```
+
 
 ## Boosted tree
 
