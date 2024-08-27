@@ -1941,6 +1941,8 @@ registerDoParallel(cl)
 
 
 
+model_datasets$x_train[[1]]
+
 # Fit random forest models
 forest_models <- model_datasets %>% 
   expand_grid(ntree = c(100, 150, 200, 250, 300, 400, 500, 800, 1000)) %>% 
@@ -2042,7 +2044,8 @@ forest_rsquared %>%
 ```
 
 
-Overall, models with higher mtry values were associated with a higher R-squared. A more pronounced difference was observed for the number of trees parameter.
+Overall, models with higher mtry values were associated with a higher R-squared. 
+A more pronounced difference was observed for the number of trees parameter with higher number of trees leading to better performance in the full untransformed dataset and smaller number of trees being more effect for the reduced untransformed dataset.
 
 #### Compare random forest models in terms of RMSE and MAE
 
@@ -2094,6 +2097,7 @@ for (i in 1:nrow(forest_performance)) {
 cowplot::plot_grid(plots_forest[[1]], plots_forest[[2]], nrow = 2)
 ```
 
+When compared in terms of RMSE and MAE, random forest models fitted to the untransformed datasets revealed similarly preferable values of `ntree` and `mtry`.
 
 ```{r}
 # Compare transformed models in terms of RMSE and MAE
@@ -2141,15 +2145,6 @@ best_forest2 %>%
 ```
 
 
-
-
-```{r}
-randomForest::partialPlot(
-  best_forest$fit[[2]], 
-  x.var = Games, 
-  pred.data = model_datasets$x_train[[2]]
-  )
-```
 
 
 ```{r include=FALSE}
@@ -2200,10 +2195,10 @@ plan(sequential)
 
 
 
-```{r include=FALSE}
+```{r }
 
 
-
+# Plot partial predictions of the selected variables
 best_forest2 %>% 
   unnest() %>% 
   mutate(salary = if_else(str_detect(dataset, "log"), exp(salary), salary)) %>% 
@@ -2211,14 +2206,6 @@ best_forest2 %>%
   geom_line() +
   facet_wrap(~predictor_name, scales = "free")
 
-
-```
-
-
-```{r}
-best_forest2 %>% 
-  unnest() 
-  
 
 ```
 
