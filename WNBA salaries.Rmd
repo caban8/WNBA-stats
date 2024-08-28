@@ -43,7 +43,7 @@ knitr::opts_chunk$set(
 if(!require('pacman')) {install.packages('pacman')}
 
 # Load all libraries
-pacman::p_load(modelr, xgboost, DT, readxl,leaps,furrr, rstatix, broom, bestglm, glmnet, leaps, car,  pROC, caret, tree, rpart, randomForest, rpart.plot, doParallel, tidyverse)
+pacman::p_load(pdp, modelr, xgboost, DT, readxl,leaps,furrr, rstatix, broom, bestglm, glmnet, leaps, car,  pROC, caret, tree, rpart, randomForest, rpart.plot, doParallel, tidyverse)
 
 
 # Set up parallel backend
@@ -2020,9 +2020,12 @@ with mtry being between
 
 Except for one model, the preferable number of trees for growing were between 100 and 150.
 
+The analysis also revealed that the best models were those fitted either to the reduced untransformed data or the full dataset with a log-transformed outcome.
 
 
-#### Compare random forest models in terms of r2
+
+
+#### R-squared Comparison
 
 ```{r}
 
@@ -2034,7 +2037,7 @@ forest_rsquared <- forest_fitted %>%
 
 # Compare tuning parameters in terms of the R-squared on a heatmap
 forest_rsquared %>% 
-  ggplot(aes(mtry, factor(ntree))) +
+  ggplot(aes(factor(mtry), factor(ntree))) +
   geom_tile(aes(fill = Rsquared)) +
   geom_point(data = filter(forest_rsquared, best), color = "red") +
   facet_wrap(~dataset, scales = "free") +
@@ -2044,10 +2047,10 @@ forest_rsquared %>%
 ```
 
 
-Overall, models with higher mtry values were associated with a higher R-squared. 
-A more pronounced difference was observed for the number of trees parameter with higher number of trees leading to better performance in the full untransformed dataset and smaller number of trees being more effect for the reduced untransformed dataset.
+Overall, models with higher `mtry` values were associated with a higher R-squared. 
+A more pronounced difference was observed for the number of trees parameter, with a higher number of trees leading to better performance in the full untransformed dataset, while, in contrast, a smaller number of trees was more effective for the reduced untransformed dataset.
 
-#### Compare random forest models in terms of RMSE and MAE
+#### RMSE and MAE comparison
 
 ```{r}
 
@@ -2075,7 +2078,7 @@ for (i in 1:nrow(forest_performance)) {
   
   plots_forest[[i]] <-  forest_performance$data[[i]] %>% 
     # filter(str_detect(dataset, "original"), Metric == "RMSE") %>% 
-    ggplot(aes(mtry, factor(ntree))) +
+    ggplot(aes(factor(mtry), factor(ntree))) +
     geom_tile(aes(fill = Performance)) +
     geom_point(data = filter(forest_performance$data[[i]], best), color = "red") +
     facet_wrap(~dataset, scales = "free") +
@@ -2097,14 +2100,16 @@ for (i in 1:nrow(forest_performance)) {
 cowplot::plot_grid(plots_forest[[1]], plots_forest[[2]], nrow = 2)
 ```
 
-When compared in terms of RMSE and MAE, random forest models fitted to the untransformed datasets revealed similarly preferable values of `ntree` and `mtry`.
+When compared in terms of RMSE and MAE, random forest models fitted to the untransformed datasets revealed a similar pattern of tuning parameter preference to the R-squared comparison.
+However, the analysis of mean absolute error identified a different optimal model for the reduced untransformed dataset, which was associated with a higher `mtry` value.
+
 
 ```{r}
 # Compare transformed models in terms of RMSE and MAE
 cowplot::plot_grid(plots_forest[[3]], plots_forest[[4]], nrow = 2)
 
 ```
-
+The pattern of tuning parameter preference for the transformed dataset model fitting was very similar across all three performance metrics, with the same tuning parameters identified for the optimal models.
 
 ### Predictors importance
 
@@ -2130,8 +2135,8 @@ best_forest2 %>%
   ggplot(aes(y = rowname, x = IncNodePurity, color = dataset)) +
   geom_point()
 ```
-Interestingly, the random forest models revealed games and games started as the most important predictors.
-Less important, but still noticeable predictors, were field goals, personal fouls, points and 2-Point Field Goals.
+Interestingly, the random forest models revealed `Games` and `Games Started` as the most important predictors.
+Less important, but still noticeable predictors, were `Field Goals`, `Personal Fouls`, `Points`, and `2-Point Field Goals`.
 
 ```{r}
 # Plot predictors importance values for the transformed datasets
@@ -2180,7 +2185,9 @@ best_forest2 <- best_forest %>%
     plots_Games = future_map2(fit, x_train, partialPlot, x.var = "Games", plot = FALSE),
     plots_GS = future_map2(fit, x_train, partialPlot, x.var = "GS", plot = FALSE),
     plots_FG = future_map2(fit, x_train, partialPlot, x.var = "FG", plot = FALSE),
-    plots_PTS = future_map2(fit, x_train, partialPlot, x.var = "PTS", plot = FALSE)
+    plots_PTS = future_map2(fit, x_train, partialPlot, x.var = "PTS", plot = FALSE),
+    plots_PF = future_map2(fit, x_train, partialPlot, x.var = "PF", plot = FALSE),
+    plots_Two_P = future_map2(fit, x_train, partialPlot, x.var = "Two_P", plot = FALSE),
   ) %>% 
   select(dataset, starts_with("plots")) %>% 
   pivot_longer(-dataset, names_to = "predictor_name", values_to = "partial_predictions") %>% 
@@ -2204,7 +2211,8 @@ best_forest2 %>%
   mutate(salary = if_else(str_detect(dataset, "log"), exp(salary), salary)) %>% 
   ggplot(aes(predictor, salary, color = dataset, group = dataset)) +
   geom_line() +
-  facet_wrap(~predictor_name, scales = "free")
+  facet_wrap(~predictor_name, scales = "free") +
+  theme(legend.position = "top")
 
 
 ```
@@ -2229,18 +2237,19 @@ tune_boosted <- expand_grid(
       )  
   
   
-
+# Define a quite version of the cross_fit function to capture warnings
+quiet_cross_fit <- quietly(cross_fit)
 
 # Set up parallel computing
 cl <- makeCluster(num_cores)
 registerDoParallel(cl)
 
 
-
+# Train boosted tree models
 boosted_models <- model_datasets %>% 
   select(dataset, x_train, y_train) %>% 
   mutate(
-    fit_boost = map2(x_train, y_train, cross_fit, tuning = tune_boosted, method = "xgbTree")
+    fit_boost = map2(x_train, y_train, quiet_cross_fit, tuning = tune_boosted, method = "xgbTree")
   )
 
 
@@ -2250,7 +2259,46 @@ registerDoSEQ()
 ```
 
 
+
+### Inspect warnings
+
+
 ```{r}
+
+# Extract strings with warning information
+boosted_warnings <- boosted_models %>% 
+  select(dataset, fit_boost) %>% 
+  unnest(fit_boost) %>% 
+  filter(map_lgl(fit_boost, is.character)) %>% 
+  unnest(fit_boost) %>% 
+  filter(fit_boost != "")
+
+boosted_warnings %>% 
+  kable2()
+
+```
+
+
+
+
+```{r}
+# Extract boosted model results statistics
+boosted_models <- boosted_models %>% 
+  select(dataset, fit_boost) %>% 
+  unnest(fit_boost) %>% 
+  filter(map_lgl(fit_boost, is.tibble))
+
+
+# Extract performance metrics for all boosted models
+boosted_models2 <- boosted_models %>% 
+  unnest(fit_boost) %>% 
+  select(dataset, eta, max_depth, nrounds, RMSE, MAE, Rsquared) %>% 
+  arrange_own()
+
+# Extract best 10 boosted models for reference 
+boosted_best10 <- boosted_models2 %>% 
+  slice(1:10)
+
 # Extract best boosted models
 best_boosted <- boosted_models %>% 
   unnest(fit_boost) %>% 
@@ -2259,20 +2307,41 @@ best_boosted <- boosted_models %>%
   select(dataset, fit) %>% 
   slice(1) %>% 
   ungroup()
+```
+
+
+```{r}
+# Inspect performance metrics among the models that had missing values in resampled performance measures
+boosted_models2 %>% 
+  filter(str_detect(dataset, "log")) %>% 
+  group_by(dataset) %>% 
+  get_summary_stats(RMSE, MAE, Rsquared)
 
 
 ```
 
+Five of the models fitted to the full and transformed dataset lacked R-squared estimation.
+Some models fitted to the reduced transformed dataset resulted in very small R-squared values.
+
+
+```{r}
+boosted_models2 %>% 
+  filter(is.na(Rsquared) | Rsquared < 0.01)
+
+
+```
+
+The reported missing values in resampled performance measures seems to be associated with the models fitted to the dataset with the log-transformed outcome that relied on a small learning rate and a small number of boosting iterations.
+Given this small size of the two tuning parameters and that the outcome was logarithmized, the models probably did not have enough iterations to converge properly, i.e. they failed to learn meaningful patterns.
+
+
+
+### Boosted tree models ranking
 
 
 ```{r}
 
-# Extract performance metrics for all boosted models
-boosted_models2 <- boosted_models %>% 
-  select(dataset, fit_boost) %>% 
-  unnest(fit_boost) %>% 
-  select(dataset, eta, max_depth, nrounds, RMSE, MAE, Rsquared) %>% 
-  arrange_own()
+
 
 # Show all boosted models in a table
 boosted_models2 %>% 
@@ -2280,28 +2349,105 @@ boosted_models2 %>%
 
 ```
 
+The best 10 boosted tree models, as revealed by cross-validation, explained between 
+`r min(boosted_best10$Rsquared)`
+`r max(boosted_best10$Rsquared)` proportion of the total variance,
+with mtry being between
+`r min(best_forest10$mtry)` and
+`r max(best_forest10$mtry)` predictors.
 
-### Plot
+Most of the best 10 models were those fitted to the full dataset with a log-transformed outcome. 
+
+
+
+
+#### R-squared Comparison
 
 ```{r}
-boosted_rsquared <- boosted_models2 %>% 
+
+# Combine eta and nround columns into one
+boosted_models3 <- boosted_models2 %>% 
   mutate(
     eta_nround = interaction(eta, nrounds)
   ) %>% 
+  filter(!(is.na(Rsquared) | Rsquared < 0.01))
+
+# Add information about the optimal model based on R-squared
+boosted_rsquared <- boosted_models3 %>% 
   group_by(dataset) %>% 
-  mutate(best = Rsquared == max(Rsquared)) %>% 
+  mutate(best = Rsquared == max(Rsquared, na.rm = T)) %>% 
   ungroup() 
 
 # Compare tuning parameters in terms of R-squared on a heatmap
 boosted_rsquared %>% 
-  ggplot(aes(max_depth, eta_nround)) +
+  ggplot(aes(factor(max_depth), eta_nround)) +
   geom_tile(aes(fill = Rsquared)) +
   geom_point(data = filter(boosted_rsquared, best), color = "red") +
   facet_wrap(~dataset, scales = "free") +
   labs(y = "Number of trees to grow",x = "Number of variables randomly sampled")
+
+
   
   
 ```
+
+#### RMSE and MAE Comparison
+
+
+
+```{r}
+
+# Add information about the optimal model based on R-squared
+boosted_performance <- boosted_models3 %>% 
+  pivot_longer(cols = c(RMSE, MAE), names_to = "Metric", values_to = "Performance") %>% 
+  group_by(dataset, Metric) %>% 
+  mutate(
+    best = Performance == min(Performance, na.rm = T),
+     transformed = if_else(str_detect(dataset, "log"), "Untransformed", "Transformed")
+    ) %>% 
+  ungroup() %>% 
+  nest(.by = c(Metric, transformed)) 
+    
+
+# Create list for all plots
+plots_boosted <- list()
+
+
+# Creat heatmaps for each metric and separately for transformed and untrasformed datasets
+for (i in 1:nrow(boosted_performance)) {
+  
+  plots_boosted[[i]] <-  boosted_performance$data[[i]] %>% 
+    # filter(str_detect(dataset, "original"), Metric == "RMSE") %>% 
+    ggplot(aes(factor(max_depth), eta_nround)) +
+    geom_tile(aes(fill = Performance)) +
+    geom_point(data = filter(boosted_performance$data[[i]], best), color = "red") +
+    facet_wrap(~dataset, scales = "free") +
+    labs(
+      y = "Number of trees to grow",
+      x = "Number of variables randomly sampled",
+      title = str_c(
+        "Comparison of ", boosted_performance$transformed[[i]], " models in terms of ", boosted_performance$Metric[[i]]
+        )
+      )
+}
+
+
+```
+
+
+
+```{r}
+cowplot::plot_grid(plots_boosted[[3]], plots_boosted[[4]], nrow = 2)
+```
+
+
+```{r}
+cowplot::plot_grid(plots_boosted[[1]], plots_boosted[[2]], nrow = 2)
+
+
+```
+
+
 
 ### Variable importance
 
@@ -2323,21 +2469,87 @@ best_boosted %>%
 
 
 
+
+
+#### Partial Dependence Plots
+
+
+
 ```{r}
+set.seed(123)
 
 best_boosted %>% 
+  left_join(model_datasets) %>% 
   mutate(
-    plot_Games = map(fit, xgboost::xgb.plot.deepness)
+    
   )
 
 
-xgboost::xgb.plot.shap(model = best_boosted$fit[[1]])
+best_boosted$fit[[1]]
+partial(best_boosted$fit[[1]], pred.var =  c("Games", "GS"), train = model_datasets$x_train[[1]])
+
+
+# Enable parallel computing
+plan(multisession)
+
+
+# Extract partial predictions for most important predictors
+best_boosted2 <- best_boosted %>% 
+  left_join(model_datasets) %>% 
+  mutate(
+    plots_Games = future_map2(fit, x_train, ~partial(.x, train = .y, pred.var = "Games")),
+    plots_GS = future_map2(fit, x_train, ~partial(.x, train = .y, pred.var = "GS")),
+    plots_FG = future_map2(fit, x_train, ~partial(.x, train = .y, pred.var = "FG")),
+    plots_Two_P = future_map2(fit, x_train, ~partial(.x, train = .y, pred.var = "Two_P")),
+    plots_PF = future_map2(fit, x_train, ~partial(.x, train = .y, pred.var = "PF"))
+  ) %>% 
+  select(dataset, starts_with("plots")) %>% 
+  pivot_longer(-dataset, names_to = "predictor_name", values_to = "partial_predictions") 
+
+plan(sequential)
+```
+
+
+```{r}
+
+best_boosted2$partial_predictions[[1]]
+
+best_boosted2 %>% 
+  mutate(
+    partial_predictions = map(partial_predictions, ~set_names(.x, nm = c("predictor", "salary")))
+  ) %>% 
+  unnest(partial_predictions) %>% 
+  mutate(
+    predictor_name = str_replace(predictor_name, "plots_", ""),
+    salary = if_else(str_detect(dataset, "log"), exp(salary), salary)
+    ) %>% 
+   ggplot(aes(predictor, salary, color = dataset, group = dataset)) +
+    geom_line() +
+    facet_wrap(~predictor_name, scales = "free") +
+    theme(legend.position = "top")
 
 ```
 
 
 
-# Final model comparison
+The more the field Goals, Games Started and Two points goals, the higher was the salary, generally speaking.
+
+The optimal number of Field Goals and Two Point Goals were around 130 and 90 respectively, with higher numbers not increasing the salary anymore. In the case of number of Games Started, the optimal value was around 30.
+
+In contrast, the more the Games and Personal Fouls, the smaller the salary.
+Salary strongly dropped with around 10 Personal Fouls and remained at a similar level until another drop with more than 50 fouls.
+In the case of number of Games, salary started consistently dropping after above more than 10 games.
+
+
+
+
+### Summary
+
+
+
+
+
+# Final models comparison
 
 ## Functions for performance metrics
 
