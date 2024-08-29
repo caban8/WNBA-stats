@@ -1279,7 +1279,9 @@ regsubsets_best10 %>%
 
 ```
 
-#### Best 10 models
+### Models' Ranking
+
+#### Top 10 models
 
 Cross-validation revealed that the best 10 linear models explained between 
 `r min(regsubsets_best10$Rsquared)`
@@ -1289,7 +1291,7 @@ having between
 `r max(regsubsets_best10$predictors)` predictors.
 
 
-##### Performance against number of predictors
+#### Performance metrics Comparison
 
 
 ```{r}
@@ -1351,9 +1353,16 @@ lm_coefs <- best_lm2 %>%
 
 
 ```{r}
+# Plot standardized coefficients of the predictors for the four best linear models together
 lm_coefs %>% 
   ggplot(aes(std_estimate, term, color = dataset, alpha = significant)) +
-  geom_point(position = position_jitter(width = 0, height = 0.3)) 
+  geom_point(position = position_jitter(width = 0, height = 0.3)) +
+  coord_cartesian(xlim = c(
+    -abs(max(lm_coefs$std_estimate, na.rm = T)),
+     abs(max(lm_coefs$std_estimate, na.rm = T)))
+    ) +
+  geom_vline(xintercept = 0)
+
 ```
 
 Regardless of the model, field goals, year, and number of games were the strongest predictors of a WNBA player's salary.
@@ -1509,7 +1518,7 @@ set.seed(123)
 # Create search grid for lambda parameter in lasso
 tune_lasso <- data.frame(
   alpha = 1,
-  lambda = 10^seq(3, -2, length = 100) 
+  lambda = 10^seq(3, -3, length = 100) 
 )
 
 
@@ -1537,10 +1546,49 @@ best_lasso <- lasso_models %>%
   slice(1) %>% 
   select(dataset, lambda, fit) %>% 
   ungroup()
+
+
+# Extract performance metrics information 
+lasso_models <- lasso_models %>% 
+  select(-c(x_train, y_train, alpha, fit)) 
+
 ```
 
+### Inspect warnings
 
-#### Best 10 models
+
+
+```{r}
+# Inspect performance metrics statistics for unusual values
+lasso_models %>% 
+  group_by(dataset) %>% 
+  get_summary_stats(-lambda) %>% 
+  kable2()
+
+```
+
+A high number of models fitted to the transformed datasets lack R-square estimation.
+
+
+```{r}
+
+# Summarize only the models with missing R-squared values
+lasso_models %>% 
+  filter(is.na(Rsquared)) %>% 
+  get_summary_stats() %>% 
+  kable2()
+
+
+```
+
+As seen in the table above, the lack of R-squared estimation concerned models with higher lambda values.
+This is probably associated with the nature of the outcome after log-transformation which largely shrank its original value. 
+
+
+
+### Models' ranking
+
+#### Top 10 models
 
 
 ```{r}
@@ -1550,8 +1598,8 @@ best_lasso10 <- lasso_models %>%
   slice(1:10)
 
 # Arrange lasso models in terms of the chosen performance metric
-best_lasso10 %>% 
-  select(-c(fit, x_train, y_train)) 
+lasso_models %>% 
+  kable2()
 
 
 
@@ -1570,27 +1618,42 @@ with lambda values being between
 
 
 
-##### Performance against lambda
+#### Performance metrics Comparison
 
 
 ```{r}
 # Plot scatterplots of number of variables against R-squared
 lasso_models  %>% 
   group_by(dataset) %>% 
-  mutate(best = Rsquared == max(Rsquared, na.rm = T)) %>%
+  mutate(
+    best = Rsquared == max(Rsquared, na.rm = T),
+    lambda = log(lambda)
+    ) %>%
+  ungroup() %>% 
+  drop_na(Rsquared) %>% 
   ggplot(aes(lambda, Rsquared, color = dataset, alpha = best, shape = best)) +
   geom_point() +
-  facet_wrap(~dataset, scales = "free")
+  facet_wrap(~dataset, scales = "free_x")
 ```
 
+Models fitted to the untrasformed datasets resulted in similar performance across all lambda values with models being slighlty better at the higher lambda values. 
+The latter was somewhat more pronounced in the case of the reduced dataset.
+
+In contrast, 
+lasso models fitted to the datasets with log-transformed outcome performed better at smaller values of lambda with a noticeable and consistent decrease starting with a `log(lambda)` value of `-4`.
 
 
 ```{r}
 lasso_models %>% 
+  drop_na(Rsquared) %>% 
   select(dataset, lambda, RMSE, MAE) %>% 
   pivot_longer(c( RMSE, MAE), names_to = "Metric", values_to = "Performance") %>% 
   group_by(dataset, Metric) %>% 
-  mutate(best = Performance == min(Performance)) %>% 
+  mutate(
+    best = Performance == min(Performance),
+    lambda = log(lambda)
+    ) %>% 
+  ungroup() %>% 
   ggplot(aes(lambda, Performance, color = dataset, alpha = best, shape = best)) +
   geom_point() +
   facet_grid(dataset ~ Metric, scales = "free")
@@ -1599,7 +1662,7 @@ lasso_models %>%
 
 
 
-#### Best models' coefficients
+### Best models' coefficients
 
 
 ```{r}
@@ -1638,6 +1701,7 @@ best_lasso_reduced2 <- best_lasso_reduced %>%
     Rsquared = map2_dbl(fit, test_dummy,  rsquare),
     MAE = map2_dbl(fit, test_dummy,  mae),
     map_df(fit, glance),
+    coefs = map(fit, ~lm.beta::lm.beta(.) %>% tidy()),
     vif = map(fit, vif),
     vif_names = map(vif, names),
     augmented = map(fit, augment)
@@ -1647,7 +1711,43 @@ best_lasso_reduced2 <- best_lasso_reduced %>%
   
 
 
+# Extract coefficients from the updated best lasso models after reduction of zero-coefficient predictors 
+lasso_coefs <- best_lasso_reduced2 %>% 
+  select(dataset, coefs) %>% 
+  unnest() %>% 
+  group_by(dataset) %>% 
+  arrange(desc(std_estimate)) %>% 
+  ungroup() %>% 
+  mutate(across(where(is.double), ~round(., 3))) %>% 
+  mutate(
+    std_estimate2 = if_else(
+      p.value <= 0.05, 
+      str_c(std_estimate, "*"), 
+      as.character(std_estimate) 
+    ),
+    significant = p.value <= 0.05
+  )
+
+
+
+
 ```
+
+
+
+```{r}
+# Plot standardized coefficients of the predictors for the four best linear models together
+lasso_coefs %>% 
+  ggplot(aes(std_estimate, term, color = dataset, alpha = significant)) +
+  geom_point(position = position_jitter(width = 0, height = 0.3)) +
+  coord_cartesian(xlim = c(
+    -abs(max(lasso_coefs$std_estimate, na.rm = T)),
+     abs(max(lasso_coefs$std_estimate, na.rm = T)))
+    ) +
+  geom_vline(xintercept = 0)
+
+```
+
 
 ### Model diagnostics
 
@@ -1784,7 +1884,8 @@ set.seed(123)
 
 
 # Set up tuning grid for tree models
-tune_tree <- data.frame(cp = seq(0.001, 0.5, 0.005) )
+tune_tree <- data.frame(cp = seq(0.001, 0.1, 0.001) )
+
 
 
 
@@ -1799,6 +1900,7 @@ tree_models <- model_datasets %>%
       tuning = tune_tree,
       method = "rpart"
       ))
+
 
 
 # Arrange models in terms of RMSE
@@ -1816,6 +1918,8 @@ best_tree <- tree_models2 %>%
 ```
 
 
+### Models' ranking
+
 ```{r}
 # Arrange tree models from best to worst
 tree_models2 %>% 
@@ -1826,6 +1930,8 @@ tree_models2 %>%
 ```
 
 
+
+#### Performance Metrics Comparison
 
 
 ```{r}
@@ -1842,6 +1948,10 @@ tree_models2 %>%
   geom_point() +
   facet_wrap(~dataset, scales = "free")
 ```
+
+Overall, regardless of the dataset category, smaller values of complexity parameter were associated with a better model fit.
+Therefore, allowing for more complex tree models with less pruning resulted in better predictions of the salary.
+
 
 
 ```{r}
@@ -1994,6 +2104,8 @@ best_forest <- forest_models %>%
 ```
 
 
+
+
 ```{r}
 
 # Extract model performance metrics by ntree and mtry
@@ -2011,6 +2123,9 @@ forest_fitted %>%
   kable2()
 
 ```
+
+#### Top 10 models
+
 Cross-validation revealed that the best 10 random forest models explained between 
 `r min(best_forest10$Rsquared)`
 `r max(best_forest10$Rsquared)` proportion of the total variance,
@@ -2126,6 +2241,8 @@ best_forest2 <- best_forest %>%
 ```
 
 
+
+
 ```{r}
 # Plot predictors importance values for the untransformed datasets
 best_forest2 %>% 
@@ -2137,6 +2254,10 @@ best_forest2 %>%
 ```
 Interestingly, the random forest models revealed `Games` and `Games Started` as the most important predictors.
 Less important, but still noticeable predictors, were `Field Goals`, `Personal Fouls`, `Points`, and `2-Point Field Goals`.
+
+
+
+
 
 ```{r}
 # Plot predictors importance values for the transformed datasets
@@ -2150,6 +2271,7 @@ best_forest2 %>%
 ```
 
 
+#### Partial Dependence Plots
 
 
 ```{r include=FALSE}
@@ -2167,8 +2289,6 @@ extract_partial <- function(partial_data) {
 
 
 
-partialPlot(best_forest$fit[[1]], model_datasets$x_train[[1]], "Games") %>% 
-  extract_partial()
 ```
 
 
@@ -2336,8 +2456,9 @@ Given this small size of the two tuning parameters and that the outcome was loga
 
 
 
-### Boosted tree models ranking
+### Models' ranking
 
+#### Top 10 models
 
 ```{r}
 
@@ -2449,7 +2570,7 @@ cowplot::plot_grid(plots_boosted[[1]], plots_boosted[[2]], nrow = 2)
 
 
 
-### Variable importance
+### Predictors' importance
 
 ```{r}
 
