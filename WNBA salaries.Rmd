@@ -77,6 +77,10 @@ colors <- c(
  "#0B8494"
 )
 
+# Set the dot color for performance metrics comparison
+dot_color <- "red"
+
+
 
 # Set global options for ggplot colors
 thematic::thematic_rmd(
@@ -87,25 +91,8 @@ thematic::thematic_rmd(
 # Set global ggplot2 theme
 theme_set(theme_minimal())
 
-# Histogram
-plot_hist <- list(
-  geom_histogram(aes(y= after_stat(density)), fill=colors[1], color=colors[4]),
-  geom_density(color=colors[2], linewidth=1),
-  theme_light(),
-  theme(plot.title = element_text(hjust = 0.5))
-)
 
 
-# Line plot
-plot_line2 <- list(
-  geom_line(color = colors[1]),
-  scale_color_manual(values = c(colors[1], colors[2])),
-  guides(color = "none"),
-  theme_light(),
-  theme(
-    plot.title = element_text(hjust = 0.5)
-    )
-)
 
 
 ```
@@ -1972,9 +1959,12 @@ tree_models2 %>%
 
 ```
 
-Generally speaking, the tree models with a complexity parameter smaller than 0.1 performed better on the cross-validation prediction.
+Judging by RMSE, models achieved the best fit when the complexity was at a level between 0.025 and 0.05.
 
-### Predictors
+Analysis of the MAE results indicate a stronger difference in model optimization between different datasets, with the models fitted to the datasets with a log-transformed outcome showing preference for higher cp values, above around 0.04.
+
+
+### Predictors' analysis the best models
 
 
 ```{r}
@@ -2006,28 +1996,77 @@ best_tree %>%
 ```
 
 
-### Tree leafs
+Number of Games Started was the only predictor that was used as a split in all four tree models and it was also associated with the highest importance in the models fitted to the untransformed datasets.
+
+
+
+
+
+
+### Tree leafs plots
+
+
+```{r}
+# Move best tree fits into a list
+best_trees_list <- best_tree$fit %>% 
+  set_names(best_tree$dataset)
+```
+
+
+#### Full untransformed dataset
 
 
 ```{r}
 
-
-rpart.plot(best_tree$fit[[1]])
-
-
+rpart.plot(best_trees_list$full_original, digits = -3)
 
 ```
+
+
+The optimal tree model among those fitted to the full untrasfromed dataset predicted the highest salary for WNBA players who had at least 11 Games Started, more than 0.5 Two Point Field Goals percentage and played in 2018. 
+Having lass than 11 Games started was associated with the lowest salary.
+
+#### Reduced untransformed dataset
+
+```{r}
+
+
+rpart.plot(best_trees_list$reduced_original, digits = -3)
+
+```
+
+The best among models fitted to the reduced untransformed dataset revealed that only number of Games Started was predictive of salary with players having at least 11 Games Started having a higher salary.
+
+
+
+#### Full log-transformed dataset
 
 
 ```{r}
 
-rpart.plot(best_tree$fit[[2]] )
+rpart.plot(best_trees_list$full_log, digits = -5)
 
 ```
+
+
+#### Reduced log-transformed dataset
+
+
+```{r}
+
+rpart.plot(best_trees_list$reduced_log, digits = -5)
+
+```
+
+Similar to the reduced untransformed dataset, the optimal model fitted to the reduced dataset with a log-transformed outcome revealed only one predictor: players with at least 11 games started were associated with a higher salary.
 
 ### Summary
 
 Overall, the tree models performed noticeably worse in comparison to the linear models. 
+
+
+
+
 
 
 ## Random forest
@@ -2133,7 +2172,7 @@ with mtry being between
 `r min(best_forest10$mtry)` and
 `r max(best_forest10$mtry)` predictors.
 
-Except for one model, the preferable number of trees for growing were between 100 and 150.
+Except for one model, the preferable number of trees for growing was between 100 and 150.
 
 The analysis also revealed that the best models were those fitted either to the reduced untransformed data or the full dataset with a log-transformed outcome.
 
@@ -2150,14 +2189,29 @@ forest_rsquared <- forest_fitted %>%
   mutate(best = Rsquared == max(Rsquared)) %>% 
   ungroup() 
 
+
+# Set common options for heatmaps
+heatmap_aesthetics <- list(
+  scale_fill_viridis_c(option = "D", direction = 1)
+)
+
+# Set common options for heatmaps
+heatmap_aesthetics2 <- list(
+  scale_fill_viridis_c(option = "D", direction = -1)
+)
+
+
+
+
 # Compare tuning parameters in terms of the R-squared on a heatmap
 forest_rsquared %>% 
   ggplot(aes(factor(mtry), factor(ntree))) +
   geom_tile(aes(fill = Rsquared)) +
-  geom_point(data = filter(forest_rsquared, best), color = "red") +
+  geom_point(data = filter(forest_rsquared, best), color = dot_color) +
   facet_wrap(~dataset, scales = "free") +
   labs(y = "Number of trees to grow",x = "Number of variables randomly sampled") +
-  theme(legend.position = "top")
+  theme(legend.position = "top") +
+  heatmap_aesthetics
 
 ```
 
@@ -2203,7 +2257,8 @@ for (i in 1:nrow(forest_performance)) {
       title = str_c(
         "Comparison of ", forest_performance$transformed[[i]], " models in terms of ", forest_performance$Metric[[i]]
         )
-      )
+      ) +
+    heatmap_aesthetics2
 }
 
 ```
@@ -2336,6 +2391,22 @@ best_forest2 %>%
 
 
 ```
+
+Across all datasets, Field Goals, Games Started, Points, and Two Points Field Goals were positively associated with Salary, while number of Games and Personal Fouls were negative predictors of Salary.
+
+
+Salary started to increase largely with more than 50 Field Goals with the increase levelling at around 150 Field Goals. Similar trends were observed for for Games Started for numbers between 10 and 30 and, not as sharp, Points for values between 200 and 500. 
+
+The increase in salary in response to increase in number of Two Points Field Goals was more drastic, with a high increase of the former between 75 and 90 Two Points Field Goals with values above 100 up to
+`r max(wnba_complete$Two_P)` showing no further improvement. 
+This suggests that there is a narrow effect window strongly differenting players in terms of their salary.
+
+Number of Games was associated with a steady decrease in salary until leveling at around a value of 40.
+
+Personal Fouls displayed a more discrete relationship with Salary with values around 10 and then 45 marking two large drops in Salary.
+
+
+
 
 
 ## Boosted tree
@@ -2505,7 +2576,8 @@ boosted_rsquared %>%
   geom_tile(aes(fill = Rsquared)) +
   geom_point(data = filter(boosted_rsquared, best), color = "red") +
   facet_wrap(~dataset, scales = "free") +
-  labs(y = "Number of trees to grow",x = "Number of variables randomly sampled")
+  labs(y = "Number of trees to grow",x = "Number of variables randomly sampled") +
+  heatmap_aesthetics
 
 
   
@@ -2549,7 +2621,8 @@ for (i in 1:nrow(boosted_performance)) {
       title = str_c(
         "Comparison of ", boosted_performance$transformed[[i]], " models in terms of ", boosted_performance$Metric[[i]]
         )
-      )
+      ) +
+    heatmap_aesthetics2
 }
 
 
