@@ -99,7 +99,16 @@ theme_set(theme_minimal())
 
 
 
+# Introduction
+
+
+The aim of the analysis was to find the best predictors of Women's NBA players' salary among their different gaming stats. 
+
+
+
 # Methodology
+
+
 
 
 ## Datasets
@@ -166,15 +175,26 @@ salaries %>%
 ```
 
 
+```{r}
+
+
+sal_dim <- dim(salaries)
+
+```
+There are `r sal_dim[1]` observations in the salary dataset with `r sal_dim[2]` variables.
+
+
 
 ```{r}
 
-salaries %>% 
+# Check if there are any NAs in the salaries dataset
+salaries_na <- salaries %>% 
   is.na() %>% 
   colSums()
 
 ```
 
+There are `r sum(salaries_na)` missing data points in total. 
 
 
 ```{r}
@@ -187,7 +207,7 @@ duplicates <- salaries %>%
 
 ```
 
-There were `r duplicates` duplicates in the salary dataset.
+There are `r duplicates` duplicates in the salary dataset.
 
 ```{r}
 salaries[duplicated(salaries),]
@@ -206,8 +226,6 @@ salaries <- salaries %>%
 
 
 # Format salaries to double
-salaries$Salary
-
 salaries <- salaries %>% 
   mutate(
     Salary = str_replace_all(Salary, pattern = "\\$|,", "") %>% as.double()
@@ -240,7 +258,10 @@ We have salary data for years `r min(salaries$year)` - `r max(salaries$year)`.
 
 
 ```{r}
+# Import cpi data
 cpi <- read_csv("CPI.csv")
+
+# Extract and modify part of cpi data to match it with the salary data
 cpi2 <- cpi %>%
   filter(
     Measure == "Index",
@@ -268,11 +289,13 @@ Therefore, we will adjust the salaries from previous years (2018 to 2022) to ref
 
 
 ```{r}
+# Extract the CPI of the reference year to which the value of salaries will be adjusted
 CPI_base <- cpi2 %>% 
   filter(year == 2023) %>% 
   pull(CPI)
   
 
+# Add the cpi information to salaries
 salaries <- salaries %>%
   left_join(cpi2) %>%
   mutate(
@@ -280,7 +303,10 @@ salaries <- salaries %>%
     salary_adj = Salary * iaf
   ) %>% 
   select(-c(CPI, iaf))
+```
 
+
+```{r}
 # Extract a single player that played in most years
 player_example <- salaries %>% 
   count(Player) %>% 
@@ -295,7 +321,7 @@ salaries %>%
 
 ```
 
-As expected, the salaries for all years expect for the current (base) year increased, as to reflect their value in terms of the value of 2023 dollar.
+As expected, the salaries for all years except for the current (base) year increased, as to reflect their value in 2023 dollars.
 
 
 
@@ -311,7 +337,7 @@ codebook <- read_excel("codebook.xlsx") %>%
 codebook <- codebook %>% 
   arrange(variable) 
 
-view(codebook)
+# view(codebook)
 
 # List player stats datasets for all years
 stats_files <- list.files("players stats")
@@ -327,23 +353,24 @@ wnba_year <- str_extract(stats_files, pattern = "[0-9]+") %>%
 stats_imported <- stats_import %>% 
   map(read_excel)
 
-# Check compatibility
+# Check compatibility of stats datasets variable names across years
 stats_imported %>% 
   map(names) %>% 
   reduce(setdiff)
 ```
 
-There are no differences in names of the datasets when compared one after another
+There are no differences in names of the datasets when compared to one another.
 
 
 ```{r}
 
+# Check compatibility of stats datasets number of variables across years
 stats_imported %>% 
   map_dbl(length) %>% 
   unique()
 ```
 
-All datasets have the same number of variables
+All datasets have the same number of variables.
 
 
 ```{r}
@@ -362,26 +389,44 @@ wnba_stats <- stats_imported %>%
 
 glimpse(wnba_stats)
 
+wnba_dim <- dim(wnba_stats)
+
 ```
 
 
+The compiled WNBA players' stats dataset consists of `r wnba_dim[1]` observations and `r wnba_dim[2]` variables.
+
+
 ```{r}
+
+# Check duplicates
 wnba_stats %>% 
   duplicated() %>% 
   sum()
 
 ```
 
+There were no duplicated rows.
 
 ```{r}
 
+# Check unique values for character vectors
 wnba_stats %>% 
   select(where(is.character)) %>% 
   select(-Player) %>% 
-  map(unique)
+  map(unique) %>% 
+  enframe(name = "Variable", value = "Unique values") %>% 
+  mutate(
+    `Uniques number` = map(`Unique values`, length),
+    `Unique values` = map_chr(`Unique values`, str_c, collapse = ", ")
+    ) %>% 
+  kable2()
 
 
 ```
+
+There are two character variables, Team and Position, which contain 14 and 7 unique values (categories) respectively.     
+
 
 
 ### Correcting vector type
@@ -401,9 +446,13 @@ wnba_stats <- wnba_stats %>%
 ```{r}
 
 wnba_stats %>% 
-  get_summary_stats()
+  get_summary_stats() %>% 
+  kable2()
 
 ```
+
+
+Two pairs of variables have exactly the same values for all descriptive statistics, which suggests they are identical. 
 
 
 ### Correcting duplicates 
@@ -412,13 +461,14 @@ wnba_stats %>%
 
 ```{r}
 
-# Correcting duplicate variables
+# Identify duplicated variables
 duplicated_vars <- wnba_stats %>% 
   as.list.data.frame() %>% 
   duplicated() 
 
-
-wnba_stats[, duplicated_vars]
+# Show duplicated variables
+wnba_stats[, duplicated_vars] %>% 
+  kable2()
 
 
 
@@ -433,7 +483,7 @@ Two variables are duplicated.
 ```{r}
 
 
-# Remove duplicates
+# Remove duplicated variables
 wnba_stats <- wnba_stats[, !duplicated_vars]
 
 
@@ -445,6 +495,7 @@ wnba_stats <- wnba_stats[, !duplicated_vars]
 
 ```{r}
 
+# Check if there are duplicated observations
 wnba_stats %>% 
   duplicated() %>% 
   sum()
@@ -452,10 +503,13 @@ wnba_stats %>%
 ```
 
 
+There are no duplicated rows in the WNBA stats dataset.
+
 
 ```{r}
 
-wnba_stats %>% 
+# Check if there are some players who have more than one row of stats for a given year
+players_year_dup <- wnba_stats %>% 
   select(Player, year) %>% 
   duplicated() %>% 
   sum()
@@ -463,8 +517,12 @@ wnba_stats %>%
 ```
 
 
+There are `r players_year_dup` cases of additional rows of stats for a given player in a given year.
+
 
 ```{r}
+
+# Identify all cases of in which in a given year a given player has more than one row of stats
 player_duplicates <- wnba_stats %>% 
   count(Player, year) %>% 
   filter(n >= 2) %>% 
@@ -475,11 +533,12 @@ player_duplicates %>%
 
 ```
 
-We have `r nrow(player_duplicates)` cases in which a given player in a given year had more than one set of stats.
+We have `r nrow(player_duplicates)` cases in which a given player in a given year had more than one row of game stats.
 
 
 ```{r}
 
+# Check if this holds true if we add team to the calculation
 wnba_stats %>% 
   count(Player, Team, year) %>% 
   filter(n >= 2)
@@ -490,17 +549,36 @@ wnba_stats %>%
 ```
 
 
-This can be explained by some of the players changing their team at least once in a given year.
+The identified repetition disappear when we include the team variable. 
+This suggests that some of the players changed their team a given number of times in a given year.
 
+```{r}
+# Create a filter vector for repetitions 
+player_filtering <- player_duplicates %>% 
+  mutate(repeated_filter = str_c(Player, year)) %>% 
+  pull(repeated_filter)
+
+# Show the different teams identified players played in given years
+wnba_stats %>% 
+  mutate(repeated_filter = str_c(Player, year)) %>% 
+  filter(repeated_filter %in% player_filtering) %>% 
+  select(Player, Team, year) %>% 
+  arrange(Player, year) %>% 
+  kable2()
+
+```
+For instance, a player named AD Durr played on three different teams during 2022.
 This raises a methodological question. 
-Given that the salaries dataset shows salaries for a given year, in order to combine those with wnba stats each player should have one summarized set of stats for a given year.
 
-A possible solution is to sum stats over a given year for those players who played in more than one team during this year. 
+Given that the salaries dataset shows salaries for a given year for a given player, to combine salaries data with wnba stats, each player should have one summary set of stats for a given year.
+
+A possible solution is to sum the stats over a given year for players who played on more than one team during this year. 
 
 The only limitation would be the position variable, as it is a categorical variable. 
 
 ```{r}
 
+# Check if among the players that changed their teams in a given year 
 wnba_stats %>% 
   count(Player, Pos, year) %>% 
   filter(n >= 2) %>% 
@@ -510,11 +588,14 @@ wnba_stats %>%
 ```
 
 However, each player that changed team in a given year nevertheless remained playing on the same position.
-
+We can therefore summarize their results over given years and add them back to the dataset.
+We will have to exclude the percentage variables during the summarization and calculate them once the summarized stats of the identified players are joined with the remaining stats of player stats in a given year.
 
 
 ```{r}
 
+
+# Obtain summary stats for each player in a given year
 wnba_summarized <- wnba_stats %>% 
   group_by(Player, year) %>% 
   select(-ends_with("%")) %>% # Exclude percentage variables
@@ -523,6 +604,7 @@ wnba_summarized <- wnba_stats %>%
   ) %>% 
   ungroup()
 
+# Extract information about position
 wnba_position <- wnba_stats %>% 
   group_by(Player, year) %>%
   select(Pos) %>% 
@@ -530,6 +612,7 @@ wnba_position <- wnba_stats %>%
   ungroup()
   
 
+# Join position and main stats datasets
 wnba_stats2 <- wnba_position %>% 
   left_join(wnba_summarized)
 
@@ -561,16 +644,24 @@ for (var in pct_filter) {
   
 }
 
+# Join all pct variables into one column
 wnba_pct <- wnba_pct %>% 
   reduce(add_column) %>% 
   rename_with(~str_c(., "%"))
 
 
+# Join main stats and pct datasets
 wnba_stats3 <- wnba_stats2 %>% 
-  add_column(wnba_pct) 
+  add_column(wnba_pct) %>% 
+  rename(
+    Games = G...4,
+    Minutes = MP...5
+  ) # Fix names of specific variables
 
+# Check if the code gave correct results
 wnba_stats3 %>% 
-  select(starts_with(pct_filter[1]))
+  select(starts_with(pct_filter[1])) %>% 
+  kable2()
 
 ```
 
@@ -725,7 +816,7 @@ salaries_back <- salaries %>%
   mutate(year = year - 1)
 ```
 
-Assuming a logical perspective, we would expect that salary would be a consequence of player's prior overall performance.
+Assuming a cause and effect relationship, we would expect that salary would be a consequence of player's prior overall performance.
 Therefore, before combining datasets, we should move salaries one year back to associate it with stats from the year prior to the year of salary.
 
 
@@ -751,10 +842,6 @@ wnba_combined %>%
 # Select only complete observations
 wnba_combined2 <- wnba_combined %>% 
   filter(!if_all(-names(salaries), is.na)) %>% 
-  rename(
-    Games = G...4,
-    Minutes = MP...5
-  ) %>% 
   mutate(
     year = factor(year),
     Pos = factor(Pos)
@@ -801,10 +888,55 @@ wnba_complete %>%
 
 ## Distribution of the variables
 
+
+
+### Compare WNBA stats distributions before and after reduction
+
+
+
 ```{r}
 
+# Pivot the full dataset stats
+pivoted_full_stats <- wnba_stats3 %>% 
+  select(where(is.double), -year) %>% 
+  pivot_longer(everything()) %>% 
+  mutate(stats_data = "full")
+
+# Pivot the combined dataset
 pivoted_everything <- wnba_complete %>% 
   pivot_longer(-c(Pos, year)) 
+
+
+# Join old and new pivoted datasets
+pivoted_combied <- pivoted_everything %>% 
+  select(-c(year, Pos)) %>% 
+  mutate(stats_data = "reduced") %>% 
+  add_row(pivoted_full_stats)
+
+
+# Compare old and new distributions 
+pivoted_combied %>% 
+  ggplot(aes(value, color = stats_data)) +
+  geom_density() +
+  facet_wrap(~name, scales = "free", ncol = 4)
+
+```
+There were moderate differences between the distributions of the full and reduced datasets for specific variables.
+
+The most noticeable differences concerned Field Goals and Field Goal Attempts, 2-point goals and 2-point goal attempts, Points, Turnovers, Steals, and Minutes, showing a proportionally smaller number of lower values in the dataset that had to be reduced due to lack of the corresponding salary data.
+
+This suggests that the salary information available on the website from which it was scraped included salaries primarily for better-performing players.
+
+The analyzed sample, therefore, is not representative of the general population and, as such, will reduce the external validity of the following statistical modeling.
+
+
+
+
+
+### Histograms
+
+```{r}
+
 
 pivoted_everything %>% 
   ggplot(aes(value)) +
@@ -841,6 +973,8 @@ wnba_complete %>%
 
 
 ```
+
+Majority of the players played either on the G or F positions. 
 
 
 ## Salary over other variables
@@ -910,6 +1044,13 @@ wnba_complete %>%
 
 ```
 
+Starting with 2019, a quarter of the players were earning more than $150,000 after adjusting for inflation, which was the maximum salary before that year.
+
+In 2020, the spread of the salaries appeared to stabilize.
+spread of the salaries seemed to stabilize.   
+
+
+
 ### Salary based on the position
 
 
@@ -957,8 +1098,8 @@ pivoted_Onsalary %>%
 
 ```
 
-None of the continuous predictors has a linear relationship with the salary variable.
-Based on that it is to predict that variants of tree models will perform better.
+None of the continuous predictors shows a linear relationship with salary.
+This suggests that the tree models should perform better.
 
 
 ### Correlations between predictors
@@ -2679,8 +2820,6 @@ best_boosted %>%
   )
 
 
-best_boosted$fit[[1]]
-partial(best_boosted$fit[[1]], pred.var =  c("Games", "GS"), train = model_datasets$x_train[[1]])
 
 
 # Enable parallel computing
@@ -2691,11 +2830,11 @@ plan(multisession)
 best_boosted2 <- best_boosted %>% 
   left_join(model_datasets) %>% 
   mutate(
-    plots_Games = future_map2(fit, x_train, ~partial(.x, train = .y, pred.var = "Games")),
-    plots_GS = future_map2(fit, x_train, ~partial(.x, train = .y, pred.var = "GS")),
-    plots_FG = future_map2(fit, x_train, ~partial(.x, train = .y, pred.var = "FG")),
-    plots_Two_P = future_map2(fit, x_train, ~partial(.x, train = .y, pred.var = "Two_P")),
-    plots_PF = future_map2(fit, x_train, ~partial(.x, train = .y, pred.var = "PF"))
+    plots_Games = future_map2(fit, x_train, ~pdp::partial(.x, train = .y, pred.var = "Games")),
+    plots_GS = future_map2(fit, x_train, ~pdp::partial(.x, train = .y, pred.var = "GS")),
+    plots_FG = future_map2(fit, x_train, ~pdp::partial(.x, train = .y, pred.var = "FG")),
+    plots_Two_P = future_map2(fit, x_train, ~pdp::partial(.x, train = .y, pred.var = "Two_P")),
+    plots_PF = future_map2(fit, x_train, ~pdp::partial(.x, train = .y, pred.var = "PF"))
   ) %>% 
   select(dataset, starts_with("plots")) %>% 
   pivot_longer(-dataset, names_to = "predictor_name", values_to = "partial_predictions") 
@@ -2706,7 +2845,7 @@ plan(sequential)
 
 ```{r}
 
-best_boosted2$partial_predictions[[1]]
+
 
 best_boosted2 %>% 
   mutate(
@@ -2841,20 +2980,11 @@ best_tested2 %>%
 ```
 
 
-
-### Importance
-
-
-```{r}
-
-  xgboost::xgb.importance(best_tested$fit[[1]])
+# Discussion
 
 
-```
+Limitations
+-   The salary data was not available for all players, especially those with lower wages
 
 
 
-
-https://stackoverflow.com/questions/30097730/error-when-using-predict-on-a-randomforest-object-trained-with-carets-train
-
-Use non formula version for train to avoid the problem with predict random forest
