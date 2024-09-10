@@ -881,16 +881,20 @@ We are still left with a substantial number of observations that have zero attem
 ```{r}
 
 wnba_complete %>% 
-  get_summary_stats()
+  get_summary_stats() %>% 
+  kable2()
 
 ```
+
+
+
 
 
 ## Distribution of the variables
 
 
 
-### Compare WNBA stats distributions before and after reduction
+### WNBA stats before and after reduction
 
 
 
@@ -941,17 +945,61 @@ The analyzed sample, therefore, is not representative of the general population 
 pivoted_everything %>% 
   ggplot(aes(value)) +
   geom_histogram() +
-  facet_wrap(~name, scales = "free")
+  facet_wrap(~name, scales = "free", ncol = 4)
 
 
 ```
 
 
+Almost all performance variables, including 2-points and 3-points goals and attempts, field goals and field goals attempts, free throws and free throws attempts, assists, blocks, steals, and total and offensive rebounds, had a right-skewed distribution, meaning that as the performance was getting better, the number of players was decreasing.
+This more or less follows the Pareto Distribution which is to be expected in variables that represent human skill.
+
+In contrast, Games had a left-skewed distribution with most players playing in around 35 games in a given year, while Games Started was a bimodal distribution, with a substantial number of players not forming the starting lineup in a given year.
+
+Personal Fouls, with the exception of several outliers on the higher end, approximated a normal distribution with most players engaging in between 25 and 75 fouls in a given year.
+
+Interestingly, the distribution of salary was bimodal with the two peaks being strikingly higher than the rest of the values which had a relatively high spread, from 50k to 250k.
+This suggests that the salary doesn't reflect the performance stats directly and that other, perhaps not available variables, might play a role.
+
+
+
+```{r}
+
+# Check the more precise values of salaries distribution
+wnba_complete %>% 
+  mutate(
+    salary_cat = cut(salary_adj, breaks = 30)
+  ) %>% 
+  count(salary_cat) %>% 
+  arrange(desc(n))
+
+
+
+```
+
+
+Most of the salaries were between 131k and 144k or 70k and 84k.
 
 
 
 
 ```{r}
+
+wnba_complete %>% 
+  mutate(year = as.double(as.character(year)) + 1) %>%  # Move salaries back to their true date
+  ggplot(aes(salary_adj)) +
+  geom_histogram() +
+  facet_wrap(~year)
+
+```
+Until 2020, none of the players earned more than 155k dollars. 
+Since then, the salaries of a noticeable number of players have risen to between 155k and 255k dollars.
+However, the number of players with salaries at the lower end (around 75k - 80k) has also grown, making them the majority.
+
+
+
+
+```{r eval=FALSE}
 
 pivoted_everything %>% 
   ggplot(aes(value)) +
@@ -975,6 +1023,7 @@ wnba_complete %>%
 ```
 
 Majority of the players played either on the G or F positions. 
+There were few players who played on a mixed position in a given year.
 
 
 ## Salary over other variables
@@ -995,7 +1044,9 @@ salaries_stats <- wnba_combined2 %>%
     mean_change = (mean - lag(mean)) / lag(mean),
     median_change = (median - lag(median)) / lag(median),
       ) %>% 
-  mutate(across(c(mean_change, median_change), ~replace_na(., 0)))
+  mutate(across(c(mean_change, median_change), ~replace_na(., 0))) %>% 
+  ungroup() %>% 
+  mutate(year = as.double(as.character(year)) + 1)
   
 
 # Plot absolute changes in salaries
@@ -1009,8 +1060,8 @@ salaries_stats %>%
 ```
 
 
-The absolute change in salaries over the years is higher for salaries before the adjustment for inflation, which is especially visible since 2019.
-Interestingly, the mean absolute change was negative for the adjusted salary between 2020 and 2021.
+The absolute change in salaries over the years is higher for salaries before the adjustment for inflation, which is especially visible since 2020.
+Interestingly, the mean absolute change from 2021 to 2022 was negative for the adjusted salary.
 
 
 
@@ -1028,8 +1079,9 @@ salaries_stats %>%
 
 ```
 
-The difference in rate of change between adjusted and unadjusted values of salaries is even more clear when presented in the percentage change.
-However, even after the adjustment, we can see that the salaries of WNBA players grew, with the expection around 2020, which could be due to difficulties COVID-19 related difficulties in organizing matches.
+The difference in the rate of change between adjusted and unadjusted values of salaries is even more clear when presented in the percentage change.
+However, even after the adjustment, we can see that the salaries of WNBA players grew, with an exception around 2021. This could explained by the difficulties in organizing matches and gathering larger crowds that the sport organizations faced due to COVID-19 pandemic.
+
 
 
 ### Salary throughout years
@@ -1056,6 +1108,8 @@ spread of the salaries seemed to stabilize.
 
 
 ```{r}
+
+# Funkcja do zliczania korekty year 
 
 wnba_complete %>% 
   ggplot(aes(Pos, salary_adj)) +
@@ -2982,6 +3036,8 @@ best_tested2 %>%
 
 # Discussion
 
+
+The role of COVID
 
 Limitations
 -   The salary data was not available for all players, especially those with lower wages
