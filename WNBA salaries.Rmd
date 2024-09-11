@@ -985,8 +985,21 @@ Most of the salaries were between 131k and 144k or 70k and 84k.
 
 ```{r}
 
+# Create a function for moving the year variable back to its original date
+year_move <- function(x, factor = TRUE) {
+  
+  # Move the variable one value up
+  year <- as.double(as.character(x)) + 1
+  
+  # Turn the variable into a factor
+  if (factor) {year <- as.factor(year)}
+  
+  return(year)
+  
+  }
+
 wnba_complete %>% 
-  mutate(year = as.double(as.character(year)) + 1) %>%  # Move salaries back to their true date
+  mutate(year = year_move(year)) %>%  # Move salaries back to their true date
   ggplot(aes(salary_adj)) +
   geom_histogram() +
   facet_wrap(~year)
@@ -1010,20 +1023,31 @@ pivoted_everything %>%
 ```
 
 
+### Player's position numbers
 
 
 ```{r}
 
-wnba_complete %>% 
-  freq_table(Pos) %>% 
+# Count player position numbers
+positions <- wnba_complete %>% 
+  freq_table(Pos) 
+
+
+
+positions %>% 
   ggplot(aes(Pos, prop)) +
-  geom_bar(stat = "identity")
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = str_c("n = ", n), vjust = -0.5))
 
 
 ```
 
-Majority of the players played either on the G or F positions. 
+Majority of the players played either on the G or F positions.
+A still substantial number of players played on the C position.
 There were few players who played on a mixed position in a given year.
+
+
+
 
 
 ## Salary over other variables
@@ -1046,7 +1070,7 @@ salaries_stats <- wnba_combined2 %>%
       ) %>% 
   mutate(across(c(mean_change, median_change), ~replace_na(., 0))) %>% 
   ungroup() %>% 
-  mutate(year = as.double(as.character(year)) + 1)
+  mutate(year = year_move(year))
   
 
 # Plot absolute changes in salaries
@@ -1090,16 +1114,16 @@ However, even after the adjustment, we can see that the salaries of WNBA players
 ```{r}
 
 wnba_complete %>% 
-  ggplot(aes(year, salary_adj)) +
+  ggplot(aes(year_move(year), salary_adj)) +
   geom_boxplot()
 
 
 ```
 
-Starting with 2019, a quarter of the players were earning more than $150,000 after adjusting for inflation, which was the maximum salary before that year.
+Starting with 2020, a quarter of the players were earning more than $150,000 after adjusting for inflation, which was the maximum salary before that year.
 
-In 2020, the spread of the salaries appeared to stabilize.
-spread of the salaries seemed to stabilize.   
+Since 2021, the spread of the salaries has appeared to stabilize.
+
 
 
 
@@ -1109,22 +1133,37 @@ spread of the salaries seemed to stabilize.
 
 ```{r}
 
-# Funkcja do zliczania korekty year 
+
+# Obtain position frequencies to place them on the boxplot
+positions_median <- wnba_complete %>% 
+  group_by(Pos) %>% 
+  get_summary_stats(salary_adj, type = "median") %>% 
+  mutate(
+    salary_adj = median - 6000,
+    n = str_c("n = ", n)
+    )
+
 
 wnba_complete %>% 
   ggplot(aes(Pos, salary_adj)) +
-  geom_boxplot()
+  geom_boxplot() +
+  geom_text(aes(label = n), data = positions_median)
 
 
 ```
 
 
 
-### Salary based on stats
+F-C position had the highest proportion of high-earning players, with half earning more than $200,000. This was closely followed by the G-F position, where salaries were slightly smaller. However, in both cases, the sample of players was small and, therefore, more prone to random fluctuations, making their estimates less reliable.
+
+There were no substantial differences between the three unmixed positions (C, F, and G). Given that only these had relatively large sample sizes, this suggests that the position does not have a significant effect on the players' earnings.
+
+### Salary based on WNBA stats
 
 
 ```{r}
 
+# Pivot data for the 
 pivoted_Onsalary <- wnba_complete %>% 
   select(where(is.double)) %>% 
   pivot_longer(-salary_adj)
@@ -1132,32 +1171,28 @@ pivoted_Onsalary <- wnba_complete %>%
 
 pivoted_Onsalary %>% 
   ggplot(aes(value, salary_adj)) +
-  geom_point(alpha = 1/3) +
-  geom_smooth(se = F) +
-  facet_wrap(~name, scales = "free", ncol = 5)
-
-```
-
-
-
-
-
-```{r}
-
-pivoted_Onsalary %>% 
-  ggplot(aes(value, salary_adj)) +
   geom_hex() +
-  geom_smooth(se = F) +
+  geom_smooth(se = F,  alpha = 2/3) +
+  scale_fill_viridis_c(option = "A", direction = -1) +
   facet_wrap(~name, scales = "free", ncol = 5)
 
 ```
 
-None of the continuous predictors shows a linear relationship with salary.
+Higher number of goals, regardless of its specific type, were generally associated with higher salaries, although in some cases - like 2-points goals and field goals and free throws - up to a given level. 
+A similar trend was observed for 
+In some cases there was a reverse at the higher values of a predictor with a small drop in salary, but those were solely to few outlier values and as such can be disregarded. 
+
+Some of the relationships were linear in approximations (3-points goals and number of assits), but the majority were non-linear and therefore more complex. 
+
+, when analyzed using simple bivariate comparisons, displayed either no or non-linear and complex relationship with salary.
+
 This suggests that the tree models should perform better.
 
 
-### Correlations between predictors
+### Associations between predictors
 
+
+#### Correlations between continuous predictors
 
 ```{r}
 
@@ -1202,6 +1237,24 @@ cor_predictors %>%
 ```
 
 Field goals, field goals attempts and points were the predictors with the highest count of strong correlations, posing highest risk for multicollinearity.
+
+
+
+#### Position and other variables
+
+
+
+```{r}
+
+wnba_complete %>%
+  select(-c(salary_adj, year)) %>% 
+  pivot_longer(-Pos) %>% 
+  ggplot(aes(Pos, value)) +
+  geom_boxplot() +
+  facet_wrap(~name, scales = "free", ncol = 4)
+
+
+```
 
 
 
