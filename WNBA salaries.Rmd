@@ -1192,7 +1192,35 @@ This suggests that the tree models should perform better.
 ### Associations between predictors
 
 
+#### 
+
+
+
 #### Correlations between continuous predictors
+
+
+
+```{r}
+
+library(ggcorrplot)
+
+wnba_complete %>% 
+  select(-c(salary_adj, year, Pos)) %>% 
+  cor(use = "pairwise.complete.obs", method = "spearman") %>% 
+  ggcorrplot(
+    type = "upper",
+    insig = "blank"
+    )
+ 
+```
+
+The majority of the continuous predictors were strongly and positively correlated with each other.
+
+However, one performance statistis stood out - 3-point goals, for the part, was either weakly or moderately correlated with t he remaining predictors and with one (Offensive Rebounds), it was even negatively associated. 
+
+Interestingly, the goal metrics, when expressed in proportion of successes to attempts, had mostly weak associations and sometimes negative with the rest of the predictors.
+This might be explained by their tendency to distort the true performance of the players who made only few attempts in total.
+
 
 ```{r}
 
@@ -1236,7 +1264,7 @@ cor_predictors %>%
 
 ```
 
-Field goals, field goals attempts and points were the predictors with the highest count of strong correlations, posing highest risk for multicollinearity.
+Field Goals, Field Goals Attempts and Points were the predictors with the highest count of strong correlations (|cor| > 0.8), posing the highest risk for multicollinearity when fitting linear models.
 
 
 
@@ -1246,12 +1274,41 @@ Field goals, field goals attempts and points were the predictors with the highes
 
 ```{r}
 
+plan(multisession)
+
+pos_anova <- wnba_complete %>% 
+  select(-c(year, salary_adj)) %>% 
+  pivot_longer(-Pos) %>% 
+  nest(.by = name) %>% 
+  mutate(
+    future_map_dfr(data, ~as_tibble(anova_test(., value ~ Pos)))
+  )
+
+
+plan(sequential)
+
+```
+
+```{r}
+
+# Extract names of the outcomes for which the p was significant
+pos_sig <- pos_anova %>% 
+  filter(p <= 0.05) %>% 
+  pull(name)
+
+```
+
+
+
+```{r}
+
 wnba_complete %>%
   select(-c(salary_adj, year)) %>% 
+  select(Pos, all_of(pos_sig)) %>% 
   pivot_longer(-Pos) %>% 
   ggplot(aes(Pos, value)) +
   geom_boxplot() +
-  facet_wrap(~name, scales = "free", ncol = 4)
+  facet_wrap(~name, scales = "free", ncol = 3)
 
 
 ```
