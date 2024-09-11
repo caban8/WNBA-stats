@@ -1276,18 +1276,46 @@ Field Goals, Field Goals Attempts and Points were the predictors with the highes
 
 plan(multisession)
 
+# Compare Positions in terms of continuous predictors using ANOVA 
 pos_anova <- wnba_complete %>% 
   select(-c(year, salary_adj)) %>% 
   pivot_longer(-Pos) %>% 
   nest(.by = name) %>% 
   mutate(
-    future_map_dfr(data, ~as_tibble(anova_test(., value ~ Pos)))
+    future_map_dfr(data, ~as_tibble(anova_test(., value ~ Pos))),
+    significant = p <=  0.05
   )
 
 
 plan(sequential)
 
 ```
+
+
+
+```{r}
+
+pos_anova %>% 
+  ggplot(aes(ges, fct_reorder(name, ges), color = significant, alpha = significant)) +
+  geom_point() +
+  geom_hline(
+    yintercept = sum(!pos_anova$significant) + 0.5, 
+    linetype = "dashed"
+    ) +
+  labs(x = "Effect size (eta-squared)", y = "") 
+
+
+
+```
+
+There were `r sum(pos_anova$significant)` 13 continuous predictors which were significantly affected by Position, out of which in 
+`r sum(pos_anova$ges >= 0.14)` cases the effect could be deemed large.
+
+The strongest differences were observed for Offensive Rebounds and Blocks which was closely followed by percentage of Field Goals, 3-Points Goal Attempts, Total Rebounds and 3-Points Goals. 
+
+There were no differences in non-performance stats, like Number of Games and Minutes played and, somewhat surprisingly, total number of Points and Field Goals.
+
+
 
 ```{r}
 
@@ -1296,19 +1324,15 @@ pos_sig <- pos_anova %>%
   filter(p <= 0.05) %>% 
   pull(name)
 
-```
-
-
-
-```{r}
-
+# Plot the comparisons of Positions in terms of the significant variables
 wnba_complete %>%
   select(-c(salary_adj, year)) %>% 
   select(Pos, all_of(pos_sig)) %>% 
   pivot_longer(-Pos) %>% 
+  left_join(pos_anova) %>% 
   ggplot(aes(Pos, value)) +
   geom_boxplot() +
-  facet_wrap(~name, scales = "free", ncol = 3)
+  facet_wrap(~fct_reorder(name, ges, .desc = T), scales = "free", ncol = 3)
 
 
 ```
@@ -1316,6 +1340,7 @@ wnba_complete %>%
 
 
 # Modelling
+
 
 
 
