@@ -33,7 +33,8 @@ knitr::opts_chunk$set(
   warning = F, 
   dpi = 300,
   message = F,
-  comment = NA
+  comment = NA, 
+  fig.showtext = TRUE
   )
 
 
@@ -43,11 +44,12 @@ knitr::opts_chunk$set(
 if(!require('pacman')) {install.packages('pacman')}
 
 # Load all libraries
-pacman::p_load(pdp, modelr, xgboost, DT, readxl,leaps,furrr, rstatix, broom, bestglm, glmnet, leaps, car,  pROC, caret, tree, rpart, randomForest, rpart.plot, doParallel, tidyverse)
+pacman::p_load(showtext, ggcorrplot, pdp, modelr, xgboost, DT, readxl,leaps,furrr, rstatix, broom, bestglm, glmnet, leaps, car,  pROC, caret, tree, rpart, randomForest, rpart.plot, doParallel, tidyverse)
 
 
 # Set up parallel backend
 num_cores <- detectCores() - 1
+
 
 ```
 
@@ -161,6 +163,23 @@ Variables imported as part of the players' stats
 
 
 
+
+## Positions
+
+| Abbreviation | Position                               |
+|--------------|----------------------------------------|
+| C            | Center                                 |
+| C-F          | Center-Forward                         |
+| F            | Forward                                |
+| F-C          | Forward-Center                         |
+| F-G          | Forward-Guard                          |
+| G            | Guard                                  |
+| G-F          | Forward-Center                         |
+
+
+
+
+
 # Data Import and Cleaning
 
 
@@ -171,7 +190,7 @@ Variables imported as part of the players' stats
 salaries <- read_csv("WNBA - salaries.csv")
 
 salaries %>% 
-  glimpse()
+  glimpse() 
 ```
 
 
@@ -214,7 +233,7 @@ salaries[duplicated(salaries),]
 ```
 
 The only duplicate concers Sylvia Fowles.
-According to spotrac (url: https://www.spotrac.com/wnba/player/_/id/29907/sylvia-fowles#:~:text=Sylvia%20Fowles%20signed%20a%203%20year%20%2C%20%24333%2C540%20contract%20with%20the,average%20annual%20salary%20of%20%24111%2C180.) she extended her contract averaging 115k dollars a year. 
+According to [spotrac](https://www.spotrac.com/wnba/player/_/id/29907/sylvia-fowles#:~:text=Sylvia%20Fowles%20signed%20a%203%20year%20%2C%20%24333%2C540%20contract%20with%20the,average%20annual%20salary%20of%20%24111%2C180) she extended her contract averaging 115k dollars a year. 
 As such this duplicate seems to be a random error and is safe to be removed.
 
 
@@ -398,15 +417,26 @@ The compiled WNBA players' stats dataset consists of `r wnba_dim[1]` observation
 
 
 ```{r}
-
-# Check duplicates
+# Inspect character vectors
 wnba_stats %>% 
-  duplicated() %>% 
-  sum()
+  select(where(is.character)) %>% 
+  map(unique) %>% 
+  map(~.[1:15])
+```
+There are 4 vectors representing proportion values that are incorrectly read as strings and therefore should be coerced to doubles.
+
+
+```{r}
+
+# Correcting vector types for 
+wnba_stats <- wnba_stats %>% 
+  mutate(
+    across(ends_with("%"), ~as.double(.))
+  )
 
 ```
 
-There were no duplicated rows.
+
 
 ```{r}
 
@@ -429,16 +459,18 @@ There are two character variables, Team and Position, which contain 14 and 7 uni
 
 
 
-### Correcting vector type
-
 ```{r}
 
-wnba_stats <- wnba_stats %>% 
-  mutate(
-    across(ends_with("%"), ~as.double(.))
-  )
+
+# Check duplicates
+wnba_duplicated <- wnba_stats %>% 
+  duplicated() %>% 
+  sum()
 
 ```
+
+There were `r wnba_duplicated` duplicated rows in the WNBA dataset.
+
 
 
 ### Summary stats
@@ -679,7 +711,8 @@ wnba_missing <- wnba_stats3 %>%
   keep(~. != 0)
 
 wnba_missing %>% 
-  enframe(name = "variable", value = "missing_sum")
+  enframe(name = "variable", value = "missing_sum") %>% 
+  kable2()
   
 
 ```
@@ -695,8 +728,8 @@ for each category only for the missing data.
 
 
 
-# Empty list
-wnba_NAs <- list()
+# Empty list for running a loop
+wnba_NAs <- list() 
 
 # Obtain separate datasets with missing variables for each set of variables
 for (i in seq_along(pct_filter)) {
@@ -711,96 +744,128 @@ for (i in seq_along(pct_filter)) {
 }
 
 
+# Show summary of instances where the NA's for pct variables occur
 wnba_NAs %>% 
   map(unique) %>% 
   reduce(add_row) %>% 
-  select(category, everything())
+  select(category, everything()) %>% 
+  knitr::kable()
 ```
 
 As we can see, missing data for percentage of success occurred only in situations when there were zero total attempts. 
-This makes sense, because you can obtain a proportion out of nothing.
+This makes sense, because you can't calculate a proportion of something to nothing.
+
+
+### Performance metrics sets
+
+
+The missing data for the performance metrics expressed in percentages raises another methodological problem. 
+The missing data cannot be imputed given the mathematical nature of those variables.
+First, let's inspect each set of performance metrics separately, to see how the three metrics in a given category are related to each other.
 
 
 ```{r}
-pct_filter %>% 
-  map(select, .data = wnba_stats3)
 
+# Obtain separate data frames for each of the goal performance category sets
 wnba_chunks <- pct_filter %>% 
   map(~select(wnba_stats3, starts_with(.))) %>% 
   map(drop_na)
 
 
-wnba_chunks %>% 
-  map(cor_test)
+
+
+
+# Obtain ggcorrplots for each sets
+ggcorr_sets <- wnba_chunks %>% 
+  map(cor) %>% 
+  map(~ggcorrplot(., lab = T)) 
+
+
+do.call(cowplot::plot_grid, ggcorr_sets)
 ```
+
+There are near perfect linear associations between successes and attempts for each category of player's performance.
+In case of the linear models, it would be necessary to remove either of the two for each pair, in order to avoid multicollinearity. 
 
 
 ```{r}
+
 wnba_chunks %>% 
-  map(plot)
+  walk(plot)
+
+
 
 
 ```
 
-There are strong linear associations between successes and attempts for each category of player's performance, above 0.9 high.
-In case of linear models, it would be necessary to remove either of the two for each pair, in order to avoid collinearity. 
 
-Interestingly, the relationship between the percentage of successful attempts and the absolute values of the sucessess and attempts is not linear. 
-The majority of observations had a visible middle with 2P and FG being located mostly between 20% and 70% of successful attempts and
-3P between 15% and 50%, showing in the respective areas also a relatively large dispersion of absolute attempts and successes.
-Players below or above the respective ranges were noticeably similar to one another in terms of absolute attempts and successes having values close to zero.
-This implies that having just a few attempts makes the player's percentage of successes a less objective performance measure, as one or two shots can decide whether a player has 0 or 100% success rate.
+
+Interestingly, the relationship between the percentage of successful attempts and the absolute values of the successes and attempts is not linear. 
+
+The majority of the observations were located within a specific and Gaussian-like interval.
+Even though those are scatter plots and not histograms, it is interesting to see that the relationships between a given percentage metric and either of the two remaining performance metrics seem to follow a normal distribution. 
+This suggests that the percentage metrics also carry information about the "norm" or the "average" skill with 2-Point Goals and Field Goals being located mostly between 30% and 65% and 3-Point Goals between 20% and 45%.
+
+
+
+```{r}
+
+# Show min and max values of percentage metrics for players with at least 10 attempts
+wnba_stats %>% 
+  filter(if_all(c("2PA", "FTA", "3PA", "FGA"), ~. >= 10)) %>% 
+  select(ends_with("%")) %>% 
+  get_summary_stats() %>% 
+  pivot_longer(c(min, max)) %>% 
+  ggplot(aes(value, variable, group = variable))  +
+  geom_line(color = "black") +
+  geom_point() +
+  labs(
+    title = "Percetange metric values for players who had at least 10 attempts",
+    y = "",
+    x = "Percetange of successes"
+    ) +
+  scale_x_continuous(label = scales::label_percent())
+
+
+```
+
+
+
+
+However, the percentage metrics suffer from a critical short-coming.
+Players below or above the respective "average" ranges were noticeably similar to one another, with values close to zero for both attempts and successes.
+Among players with more than 20 attempts there were virtually none who had a higher success rate than 70%. A similar case can be made for the lower range.
+This implies that having only a few to several attempts makes a player’s success percentage less objective as a performance measure, as one or two shots can determine whether a player has a 0% or 100% success rate.
 
 The exception is for FT (free throws) for which majority of the observations had a success rate above 60% which was also associated with a higher variance on both absolute measures - attempts and successes. 
-Given that a free throw is unhindered and always from the same position, it would on average easier to succeed in a given attempt. 
+Given that a free throw is unhindered and always from the same position, it would be on average easier to succeed in a given attempt. 
 
 
-```{r}
+```{r eval=FALSE}
 
+# Show summary stats for each sets when the proportion of successes is between 0.2 and 0.7
 wnba_chunks %>% 
   map(
     ~filter(., .[[names(.)[[3]]]] <= 0.2 | .[[names(.)[[3]]]] >= 0.70)
     ) %>% 
   map(
     get_summary_stats
-  )
+  ) %>% 
+  reduce(add_row) %>% 
+  kable2()
 
 ```
 
 
-```{r}
-wnba_chunks %>% 
-  map(
-    ~filter(., .[[names(.)[[2]]]] > 50)
-    ) %>% 
-  map(plot)
-```
 
 
 
-
-
-```{r}
-
-wnba_chunks %>% 
-  map(select, 1:2) %>% 
-  map(cor_test)
-
-```
 
 This poses a methodological trade-off dilemma.
-On one hand, the percentage index by showing the proportion of success to all attempts, seems to capture better the effectiveness of a player. 
-On the other, it seems to at the same time favor and neglect those players who had just several attempts in total.
+On one hand, the percentage index, by showing the proportion of successes to all attempts, seems to capture better the effectiveness of a player. 
+On the other hand, it seems to favor or overlook players who had just a few attempts in total, with either mostly successes or mostly misses.
 
 It also raises the question what to do with `NA` values. 
-
-
-
-```{r}
-
-wnba_stats3
-
-```
 
 
 
@@ -826,6 +891,15 @@ wnba_combined <- salaries_back %>%
   left_join(wnba_stats3) 
 
 
+# Select only complete observations
+wnba_combined2 <- wnba_combined %>% 
+  filter(!if_all(-names(salaries), is.na)) %>% 
+  mutate(
+    year = factor(year),
+    Pos = factor(Pos)
+    )
+
+# Check number of missing values of joining the two datasets
 wnba_combined %>% 
   is.na() %>% 
   colSums() %>% 
@@ -835,17 +909,12 @@ wnba_combined %>%
 
 ```
 
+Joining the salary and the WNBA stats datasets resulted in `r nrow(wnba_combined) - nrow(wnba_combined2)` observations that lacked data in all performance stats.
 
 
 ```{r}
 
-# Select only complete observations
-wnba_combined2 <- wnba_combined %>% 
-  filter(!if_all(-names(salaries), is.na)) %>% 
-  mutate(
-    year = factor(year),
-    Pos = factor(Pos)
-    )
+
 
 # Remove the unadjusted salary and player name
 wnba_complete <- wnba_combined2 %>% 
@@ -872,7 +941,7 @@ wnba_complete %>%
 ```
 
 
-We are still left with a substantial number of observations that have zero attempts in at least one of the four performance categories.
+After removing observations with no performance stats, we are still left with a substantial number of observations that have zero attempts in at least one of the four performance categories.
 
 # EDA
 
@@ -1216,14 +1285,15 @@ wnba_complete %>%
 
 The majority of the continuous predictors were strongly and positively correlated with each other.
 
-However, one performance statistis stood out - 3-point goals, for the part, was either weakly or moderately correlated with t he remaining predictors and with one (Offensive Rebounds), it was even negatively associated. 
+However, one performance statistic stood out - 3-point goals, for the most part, was either weakly or moderately correlated with the remaining predictors and with one (Offensive Rebounds), it was even negatively associated. 
 
-Interestingly, the goal metrics, when expressed in proportion of successes to attempts, had mostly weak associations and sometimes negative with the rest of the predictors.
-This might be explained by their tendency to distort the true performance of the players who made only few attempts in total.
+Interestingly, the goal metrics, when expressed as a proportion of successes to attempts, had mostly weak associations and sometimes negative ones with the rest of the predictors.
+This might be explained by their tendency to distort the true performance of the players who made only a few attempts in total.
 
 
 ```{r}
 
+# Obtain a data frame with correlations between predictors
 cor_predictors <- wnba_complete %>% 
   select(-c(salary_adj, year, Pos)) %>% 
   cor_test(method = "pearson") %>% 
@@ -1237,25 +1307,30 @@ cor_predictors %>%
 
 ```
 
-There is a substantial number of highly correlated predictors.
-First and foremost, we see almost perfect correlations between successes and attempts for each performance category pair.
-Similarly, there are very strong to near perfect correlations between number of points and some of the performance metrics, specifically, 2-points field goals, field goals, and free throws.
+There are a substantial number of highly correlated predictors.
+First and foremost, we see near perfect correlations between successes and attempts for each performance category pair.
+Similarly, there are very strong to near perfect correlations between number of points and some of the performance metrics, specifically, 2-point field goals, field goals, and free throws.
 
 
 
 
 ```{r}
+
+# Filter through only the goal performance metrics 
 cor_predictors %>% 
-  filter(var1 %in% pct_filter, var2 %in% pct_filter  )
+  filter(var1 %in% pct_filter, var2 %in% pct_filter  ) %>% 
+  kable2()
 
 
 
 ```
 
+Field goals, 2-point goals, and free throws were very strongly correlated with one another.
 
 
 ```{r}
 
+# Obtain the number of strong correlations for each predictor separately
 cor_predictors %>% 
   filter(abs(cor) >= 0.8) %>% 
   count(var1, name = "High correlations count")  %>% 
@@ -1302,7 +1377,8 @@ pos_anova %>%
     yintercept = sum(!pos_anova$significant) + 0.5, 
     linetype = "dashed"
     ) +
-  labs(x = "Effect size (eta-squared)", y = "") 
+  labs(x = "Effect size (eta-squared)", y = "") +
+  scale_alpha_discrete(range = c(0.4, 1))
 
 
 
@@ -1336,6 +1412,14 @@ wnba_complete %>%
 
 
 ```
+
+
+Center and Center-Forward positions were associated with higher numbers of Offensive Rebounds, Blocks and - to a smaller degree - Field Goal percentage, as well as lower numbers of 3-point Goals and Attempts in comparison to the remaining positions.
+
+The highest numbers of assists were observed for the Forward-Center, Forward-Guard, and Guard positions. Forward-Guard and Guard also had the highest numbers of 3-point Goals.
+On the other hand, these two and also the Guard-Forward position, had the smallest numbers of Total Rebounds.
+
+
 
 
 
@@ -3179,3 +3263,10 @@ Limitations
 
 
 
+
+
+
+# INNE
+
+
+Może dodać usuwanie obiektów, ale też i z ciekawości, wykorzystaną pamieć w danym momencie.
