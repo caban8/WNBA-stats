@@ -63,6 +63,8 @@ num_cores <- detectCores() - 1
 # create functions and general ggplot vectors to streamline code and make it more reproducible
 
 
+### General figure parameters
+height_faceted <- 10
 
 
 # Function to control the table output
@@ -820,9 +822,9 @@ wnba_stats %>%
   geom_line(color = "black") +
   geom_point() +
   labs(
-    title = "Percetange metric values for players who had at least 10 attempts",
+    title = "Percentage metric values for players who had at least 10 goal attempts",
     y = "",
-    x = "Percetange of successes"
+    x = "Percentage of successes"
     ) +
   scale_x_continuous(label = scales::label_percent())
 
@@ -834,7 +836,7 @@ wnba_stats %>%
 
 However, the percentage metrics suffer from a critical short-coming.
 Players below or above the respective "average" ranges were noticeably similar to one another, with values close to zero for both attempts and successes.
-Among players with more than 20 attempts there were virtually none who had a higher success rate than 70%. A similar case can be made for the lower range.
+Among players with more at least 10 attempts there were virtually none who had a higher success rate than 70%. A similar case can be made for the lower ranges for 2-Point and Field goals.
 This implies that having only a few to several attempts makes a player’s success percentage less objective as a performance measure, as one or two shots can determine whether a player has a 0% or 100% success rate.
 
 The exception is for FT (free throws) for which majority of the observations had a success rate above 60% which was also associated with a higher variance on both absolute measures - attempts and successes. 
@@ -955,7 +957,7 @@ wnba_complete %>%
 
 ```
 
-
+The final dataset consisted of `r nrow(wnba_complete)` records and `r ncol(wnba_complete)` variables.
 
 
 
@@ -967,7 +969,7 @@ wnba_complete %>%
 
 
 
-```{r}
+```{r fig.height=height_faceted}
 
 # Pivot the full dataset stats
 pivoted_full_stats <- wnba_stats3 %>% 
@@ -991,7 +993,8 @@ pivoted_combied <- pivoted_everything %>%
 pivoted_combied %>% 
   ggplot(aes(value, color = stats_data)) +
   geom_density() +
-  facet_wrap(~name, scales = "free", ncol = 4)
+  facet_wrap(~name, scales = "free", ncol = 4) +
+  theme(legend.position = "top")
 
 ```
 There were moderate differences between the distributions of the full and reduced datasets for specific variables.
@@ -1008,7 +1011,7 @@ The analyzed sample, therefore, is not representative of the general population 
 
 ### Histograms
 
-```{r}
+```{r fig.height=height_faceted}
 
 
 pivoted_everything %>% 
@@ -1230,7 +1233,7 @@ There were no substantial differences between the three unmixed positions (C, F,
 ### Salary based on WNBA stats
 
 
-```{r}
+```{r fig.height=height_faceted}
 
 # Pivot data for the 
 pivoted_Onsalary <- wnba_complete %>% 
@@ -1241,21 +1244,24 @@ pivoted_Onsalary <- wnba_complete %>%
 pivoted_Onsalary %>% 
   ggplot(aes(value, salary_adj)) +
   geom_hex() +
-  geom_smooth(se = F,  alpha = 2/3) +
-  scale_fill_viridis_c(option = "A", direction = -1) +
-  facet_wrap(~name, scales = "free", ncol = 5)
+  geom_smooth(se = F,  alpha = 1/3, size = 0.75, color = "orange") +
+  scale_fill_viridis_c(option = "C", direction = 1) +
+  facet_wrap(~name, scales = "free", ncol = 4) +
+  theme(legend.position = "top")
+
+
 
 ```
 
-Higher number of goals, regardless of its specific type, were generally associated with higher salaries, although in some cases - like 2-points goals and field goals and free throws - up to a given level. 
-A similar trend was observed for 
-In some cases there was a reverse at the higher values of a predictor with a small drop in salary, but those were solely to few outlier values and as such can be disregarded. 
+Higher number of goals, regardless of the category, were associated with higher salaries, until reaching a level after which further increases in goals did not seem to have an impact. 
+The exception was the 3-Points Goals, where, on average, each additional goal seemed to contribute to the salary.
 
-Some of the relationships were linear in approximations (3-points goals and number of assits), but the majority were non-linear and therefore more complex. 
+A similar trend was observed for less direct performance metrics, like number of Assists, Blocks, Steals, and Turnovers.
+In some cases there was a reverse at the higher values of a predictor with a small drop in salary, but this was due to just a few outliers and as a marker of the general relationship  can be disregarded. 
 
-, when analyzed using simple bivariate comparisons, displayed either no or non-linear and complex relationship with salary.
+Overall, the associations between salary and different performance stats seem weak. Only a few could be roughly approximated using a linear model (e.g. 3-Points Goals and number of Assists).
+This suggests that the relationship between a player's salary and her contribution to games is complex, and using non-linear modelling, like one that relies on decision trees, would be better at capturing it.
 
-This suggests that the tree models should perform better.
 
 
 ### Associations between predictors
@@ -2823,23 +2829,41 @@ Personal Fouls displayed a more discrete relationship with Salary with values ar
 
 
 
-## Boosted tree
+## Gradient-boosting trees
 
 ```{r}
 # Set seed
 set.seed(123)
 
 
+
+# Vary nrounds by eta
+eta_nrounds <- tibble(
+  eta = c(0.01, 0.05, 0.1, 0.2, 0.3),
+  nrounds = list(
+    c(500, 1000, 1500),
+    c(200, 500, 800),
+    c(100, 200, 400),
+    c(50, 100, 200),
+    c(30, 50, 100)
+  )
+)
+
+
 # Tuning grid for boosted trees
-tune_boosted <- expand_grid(
-      nrounds = c(25, 50, 100, 200),
+tune_boosted <- eta_nrounds %>% 
+  expand_grid(
       max_depth = seq(1, 9, 2),
-      eta = c(0.05, 0.1, 0.15, 0.2),
       gamma = 0,
       colsample_bytree = 1,
       min_child_weight = 1,
       subsample = 1
-      )  
+      ) %>% 
+  unnest()
+  
+
+
+
   
   
 # Define a quite version of the cross_fit function to capture warnings
@@ -2868,7 +2892,7 @@ registerDoSEQ()
 ### Inspect warnings
 
 
-```{r}
+```{r eval=FALSE}
 
 # Extract strings with warning information
 boosted_warnings <- boosted_models %>% 
@@ -2886,7 +2910,7 @@ boosted_warnings %>%
 
 
 
-```{r}
+```{r eval=FALSE}
 # Extract boosted model results statistics
 boosted_models <- boosted_models %>% 
   select(dataset, fit_boost) %>% 
@@ -2915,7 +2939,7 @@ best_boosted <- boosted_models %>%
 ```
 
 
-```{r}
+```{r eval=FALSE}
 # Inspect performance metrics among the models that had missing values in resampled performance measures
 boosted_models2 %>% 
   filter(str_detect(dataset, "log")) %>% 
@@ -2925,19 +2949,16 @@ boosted_models2 %>%
 
 ```
 
-Five of the models fitted to the full and transformed dataset lacked R-squared estimation.
-Some models fitted to the reduced transformed dataset resulted in very small R-squared values.
 
 
-```{r}
+
+```{r eval=FALSE}
 boosted_models2 %>% 
   filter(is.na(Rsquared) | Rsquared < 0.01)
 
 
 ```
 
-The reported missing values in resampled performance measures seems to be associated with the models fitted to the dataset with the log-transformed outcome that relied on a small learning rate and a small number of boosting iterations.
-Given this small size of the two tuning parameters and that the outcome was logarithmized, the models probably did not have enough iterations to converge properly, i.e. they failed to learn meaningful patterns.
 
 
 
@@ -2951,16 +2972,15 @@ Given this small size of the two tuning parameters and that the outcome was loga
 
 # Show all boosted models in a table
 boosted_models2 %>% 
-  kable2()
+  arrange_own() %>% 
+  kable2() 
 
 ```
 
 The best 10 boosted tree models, as revealed by cross-validation, explained between 
 `r min(boosted_best10$Rsquared)`
-`r max(boosted_best10$Rsquared)` proportion of the total variance,
-with mtry being between
-`r min(best_forest10$mtry)` and
-`r max(best_forest10$mtry)` predictors.
+`r max(boosted_best10$Rsquared)` proportion of the total variance
+
 
 Most of the best 10 models were those fitted to the full dataset with a log-transformed outcome. 
 
@@ -2990,13 +3010,22 @@ boosted_rsquared %>%
   geom_tile(aes(fill = Rsquared)) +
   geom_point(data = filter(boosted_rsquared, best), color = "red") +
   facet_wrap(~dataset, scales = "free") +
-  labs(y = "Number of trees to grow",x = "Number of variables randomly sampled") +
+  labs(y = "Learning rate x boosting iterations",x = "Maximum depth of a tree") +
   heatmap_aesthetics
 
 
   
   
 ```
+
+
+Each dataset followed a different pattern of preferable gradient-boosting parameters.
+When judging by R-squared, for most datasets better predictions were achieved with a higher number boosting iterations and learning 
+
+When judging by R-squared, models fitted to the full dataset with a log-transformed salary, tended to return better predictions with a higher learning rate
+
+...
+
 
 #### RMSE and MAE Comparison
 
@@ -3030,8 +3059,8 @@ for (i in 1:nrow(boosted_performance)) {
     geom_point(data = filter(boosted_performance$data[[i]], best), color = "red") +
     facet_wrap(~dataset, scales = "free") +
     labs(
-      y = "Number of trees to grow",
-      x = "Number of variables randomly sampled",
+     y = "Learning rate x boosting iterations",
+     x = "Maximum depth of a tree",
       title = str_c(
         "Comparison of ", boosted_performance$transformed[[i]], " models in terms of ", boosted_performance$Metric[[i]]
         )
@@ -3208,49 +3237,58 @@ rsquare_own <- function(predicted, true_y) {
 
 ```{r}
 
-# Remove unnecesary columns for best models mering
+# Remove unnecesary columns for best models merging
 best_lasso_reduced <- best_lasso_reduced %>% 
-  select(-test_dummy)
+  select(-test_dummy) %>% 
+  mutate(fit_class = "lm lasso")
 
 # Compare the best sets of models for all model types on the test dataset
 best_tested <- best_boosted %>% 
   add_row(best_forest) %>% 
-  add_row(best_lasso_reduced) %>% 
   add_row(best_tree) %>% 
   add_row(best_lm) %>% 
+  mutate(fit_class = map_chr(fit, class)) %>% 
+  add_row(best_lasso_reduced) %>% 
   left_join(model_datasets)  %>% 
   mutate(
-    fit_class = map_chr(fit, class),
-    test = if_else(fit_class %in% c("lm", "rpart"), test_dummy, x_test)
+    test = if_else(fit_class %in% c("lm", "rpart", "lm lasso"), test_dummy, x_test)
     ) %>% 
   mutate(
     predicted = map2(fit, test, predict),
     RMSE = map2_dbl(predicted, y_test, rmse_own),
     MAE = map2_dbl(predicted, y_test, mae_own),
-    Rsquared = map2_dbl(predicted, y_test, rsquare_own)
+    Rsquared = map2_dbl(predicted, y_test, rsquare_own),
+    best = Rsquared == max(Rsquared)
   ) %>% 
   arrange_own()
 
 # Extract only performance metrics
 best_tested2 <- best_tested %>% 
-  select(dataset, fit_class, RMSE, MAE, Rsquared)
+  select(dataset, fit_class, RMSE, MAE, Rsquared, best)
 
 # Show the model comparison in a table
 best_tested2 %>% 
-  select(dataset, fit_class, RMSE, MAE, Rsquared) %>% 
+  select(-best) %>% 
   kable2()
 
 ```
 
+Across all three model evaluation metrics, the best prediction was achieved with gradient-boosting decision trees models fitted to the datasets without the goal percentage metrics. 
+
+Interestingly, when comparing models fitted to the datasets that also included the goal percentage metrics, linear models obtained using the stepwise selection methods resulted in the best prediction of salary.
 
 
 ```{r}
 
 best_tested2 %>% 
   ggplot(aes(dataset, fit_class, fill = Rsquared)) +
-  geom_tile()
+  geom_tile() +
+  geom_point(data = filter(best_tested2, best), color = "red") +
+  heatmap_aesthetics
 
 ```
+
+
 
 
 # Discussion
