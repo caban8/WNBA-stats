@@ -660,7 +660,7 @@ pct_filter <- wnba_stats %>%
   str_replace("%", "") 
 
 # Vector to loop over
-wnba_pct <- list()
+wnba_pct <- vector("list", length(pct_filter))
 
 # Obtain percentages after data modification
 for (var in pct_filter) {
@@ -731,7 +731,7 @@ for each category only for the missing data.
 
 
 # Empty list for running a loop
-wnba_NAs <- list() 
+wnba_NAs <- vector("list", length(pct_filter))
 
 # Obtain separate datasets with missing variables for each set of variables
 for (i in seq_along(pct_filter)) {
@@ -2659,7 +2659,7 @@ forest_performance <- forest_fitted %>%
 
 
 # Create list for all plots
-plots_forest <- list()
+plots_forest <- vector("list", nrow(forest_performance))
 
 
 # Creat heatmaps for each metric and separately for transformed and untrasformed datasets
@@ -2910,12 +2910,12 @@ boosted_warnings %>%
 
 
 
-```{r eval=FALSE}
+```{r }
 # Extract boosted model results statistics
 boosted_models <- boosted_models %>% 
   select(dataset, fit_boost) %>% 
   unnest(fit_boost) %>% 
-  filter(map_lgl(fit_boost, is.tibble))
+  filter(map_lgl(fit_boost, is_tibble))
 
 
 # Extract performance metrics for all boosted models
@@ -3046,7 +3046,7 @@ boosted_performance <- boosted_models3 %>%
     
 
 # Create list for all plots
-plots_boosted <- list()
+plots_boosted <- vector("list", nrow(boosted_performance))
 
 
 # Creat heatmaps for each metric and separately for transformed and untrasformed datasets
