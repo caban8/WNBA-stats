@@ -105,8 +105,19 @@ theme_set(theme_minimal())
 
 # Introduction
 
+Sport in general is a domain in which competence is measured by well defined and precisely measured criteria. At the simplest level, winning is a direct reflection of someone's performance.
+Team sports follow the same basic principles, although in their context, it is more difficult to assess individual competence. After all, it is the team who wins, and not individual players. However, most team sports consist of a set of different plays and behaviors that can be treated as specific performance measures.
+One such sport is basketball in which player's performance is measured by the number of goals, steals, or blocks, to name a few.
+The most popular leagues, like NBA, have a long history and been well studied in different aspects.
+In contrast, WNBA, women's equivalent, was established relatively recently, in 1996, and as such has been less analyzed.
+The goal of the following analysis was to assess which and how women's basketball players performance measures predict their salary. 
 
-The aim of the analysis was to find the best predictors of Women's NBA players' salary among their different gaming stats. 
+The WNBA players' performance stats were imported from the basketball [reference stats](https://www.basketball-reference.com/), while their salaries were scraped from [spotrac](https://www.spotrac.com/wnba/rankings/).
+The data spans years from 2017 to 2023. 
+In order to account for inflation, salary was adjusted using the CPI index. 
+This is an observational study and therefore a clear cause-and-effect relationship cannot be established. Nevertheless, from a theoretical stand point, it makes sense to infer, at least partially, that performance stats translate to salary and to better approximate such relationship, salary was predicted by performance stats from one year earlier.
+
+
 
 
 
@@ -122,7 +133,6 @@ https://www.basketball-reference.com/
 
 
 Salaries
-The WNBA players' stats were scraped form:
 https://www.spotrac.com/wnba/rankings/
 
 CPI:
@@ -660,7 +670,8 @@ pct_filter <- wnba_stats %>%
   str_replace("%", "") 
 
 # Vector to loop over
-wnba_pct <- vector("list", length(pct_filter))
+wnba_pct <- vector("list", length(pct_filter)) %>% 
+  set_names(pct_filter)
 
 # Obtain percentages after data modification
 for (var in pct_filter) {
