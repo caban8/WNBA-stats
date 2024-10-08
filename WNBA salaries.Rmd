@@ -117,6 +117,21 @@ The data spans years from 2017 to 2023.
 In order to account for inflation, salary was adjusted using the CPI index. 
 This is an observational study and therefore a clear cause-and-effect relationship cannot be established. Nevertheless, from a theoretical stand point, it makes sense to infer, at least partially, that performance stats translate to salary and to better approximate such relationship, salary was predicted by performance stats from one year earlier.
 
+Given that the data suffered from high multicollinearity and that variables representing a percentage of successful goal attempts posed a methodogolical limitations for players who did not have any attempts in a given performance stats, four versions of data were created. In two versions salary, the dependent variable, was log-transformed, and in each of the pairs - log-transformed and original - one of the datasets was reduced by the four percentage variables. 
+
+Each dataset was trained and then tested using 
+Stepwise Selection Linear Regression, 
+Lasso Regression, 
+Tree model,
+Random Forest, and
+xgb boosted tree
+models.
+The analysis revealed that the best prediction was achieved by xgb boosted tree model fitted to the reduced dataset with untransformed salary, followed by the same model fitted to the reduced dataset with log-transformed salary.
+
+The best predictors of salary were number of Field Goals, Games Started, and Two-Point Field Goals, which were associated positively, and number of Games and Personal Fouls, which were associated negatively.
+
+
+
 
 
 
