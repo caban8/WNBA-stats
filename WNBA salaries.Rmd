@@ -1850,7 +1850,8 @@ best_lm3 %>%
 
 ```
 
-Judging by histograms and Q-Q plots, a slight deviation from normality can be observed, with more observations at the tails. However, this slight deviation should not significantly affect the estimation of the coefficients."
+Judging by histograms and Q-Q plots the distributions of residuals for the most part conform to the normal distributions with slight deviations at the tails,
+
 
 #### Homoscedasticity assumption
 
@@ -1867,8 +1868,7 @@ best_lm3 %>%
 
 ```
 
-The models fitted to the untransformed data suffered from heteroscedasticity, with a lower error variance at the smaller predicted values. 
-This was somewhat, but not entirely, corrected in the models with the log-transformed outcome.
+All models suffered from heteroscedasticity, with a lower error variance at the smaller predicted values, which was more pronounced in the models fitted to the untransformed data.
 Moreover, all models displayed non-linearity.
 
 
@@ -1915,7 +1915,7 @@ best_lm3 %>%
 
 ```
 
-No influential values were observed.
+No influential values were observed as judged by cook's distance.
 
 
 ##### Outliers
@@ -2000,7 +2000,7 @@ lasso_models %>%
 
 ```
 
-A high number of models fitted to the transformed datasets lack R-square estimation.
+A high number of models fitted to the transformed datasets lacked R-square estimation.
 
 
 ```{r}
