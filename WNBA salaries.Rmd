@@ -1951,7 +1951,7 @@ set.seed(123)
 # Create search grid for lambda parameter in lasso
 tune_lasso <- data.frame(
   alpha = 1,
-  lambda = 10^seq(3, -3, length = 100) 
+  lambda = 10^seq(3, -2, length = 100) 
 )
 
 
@@ -2066,7 +2066,7 @@ lasso_models  %>%
   drop_na(Rsquared) %>% 
   ggplot(aes(lambda, Rsquared, color = dataset, alpha = best, shape = best)) +
   geom_point() +
-  facet_wrap(~dataset, scales = "free_x")
+  facet_wrap(~dataset)
 ```
 
 Models fitted to the untrasformed datasets resulted in similar performance across all lambda values with models being slighlty better at the higher lambda values. 
@@ -2093,6 +2093,8 @@ lasso_models %>%
 
 ```
 
+The trends observed for R-squared comparison are reflected in the comparison of the models in terms of RMSE and MAE.
+The models fitted to the log-transformed data achieved best predictions for smaller values of lambda, while the models fitted to the untransformed data displayed a better performance for higher values of lambda.
 
 
 ### Best models' coefficients
@@ -2246,7 +2248,7 @@ best_lasso_augmented %>%
 
 ```
 
-All models suffered from heteroscedasticity, although this was less prounced in the case of those which were fitted on the logarithmically transformed outcome.
+All models suffered from heteroscedasticity, although this was less pronounced in the case of the models fitted to the log-transformed dataset.
 
 #### Multicollinearity
 
@@ -2265,7 +2267,7 @@ best_lasso_vif %>%
 
 ```
 
-Assuming the criterion of VIF > 4, All models were reported to have some degree of multicollinearity, with the field goals predictor achieving the highest multicollienarity in each of the models.
+Assuming the criterion of VIF > 4, all models were reported to have some degree of multicollinearity, with the field goals predictor achieving the highest multicollienarity in each of the models.
 
 
 
@@ -2307,6 +2309,10 @@ No observations with a standardized residual greater than |x| > 3 were found.
 
 
 #### Summary 
+
+The linear models obtained with the lasso shrinkage method achieved better performance in terms of the assumptions of linear regression. 
+Multicollinearity, overall, was substantially lower, and the distribution of residuals, at least in the case of the models fitted to the untransformed data, better approximated a normal distribution. 
+However, their predictive performance as measured by cross-validation was somewhat lower.
 
 ## Tree models
 
@@ -2407,7 +2413,7 @@ tree_models2 %>%
 
 Judging by RMSE, models achieved the best fit when the complexity was at a level between 0.025 and 0.05.
 
-Analysis of the MAE results indicate a stronger difference in model optimization between different datasets, with the models fitted to the datasets with a log-transformed outcome showing preference for higher cp values, above around 0.04.
+Analysis of the MAE results indicates a stronger difference in model optimization between different datasets, with the models fitted to the datasets with a log-transformed outcome showing preference for higher cp values, above around 0.04.
 
 
 ### Predictors' analysis the best models
@@ -2507,6 +2513,10 @@ rpart.plot(best_trees_list$reduced_log, digits = -5)
 Similar to the reduced untransformed dataset, the optimal model fitted to the reduced dataset with a log-transformed outcome revealed only one predictor: players with at least 11 games started were associated with a higher salary.
 
 ### Summary
+
+Comparison of tree models showed a lack of conformity between the three performance measures, making it more difficult to choose the best model for each dataset and, consequently, to compare them further with other model types. The models were also characterized by a relatively small number of selected predictors, which could stem from very high multicollinearity among most variables. Overall, the tree models performed noticeably worse compared to the linear models.
+
+The models were also characterized by a relatively small number of selected predictors which could stem from very high multicollinearity among most variables. 
 
 Overall, the tree models performed noticeably worse in comparison to the linear models. 
 
@@ -2851,6 +2861,13 @@ Number of Games was associated with a steady decrease in salary until leveling a
 
 Personal Fouls displayed a more discrete relationship with Salary with values around 10 and then 45 marking two large drops in Salary.
 
+
+
+### Summary
+
+The random forest achieved better predictions than standard tree models in terms of cross-validation, but performed worse compared to the linear models. The pattern of the best predictors somewhat overlapped with the standard tree models, specifically concerning the Number of Games Started and two-point goals.
+
+Interestingly, the models fitted to the log-transformed and reduced dataset performed noticeably worse than the models from the remaining three sets.
 
 
 
