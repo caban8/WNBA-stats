@@ -2865,7 +2865,8 @@ Personal Fouls displayed a more discrete relationship with Salary with values ar
 
 ### Summary
 
-The random forest achieved better predictions than standard tree models in terms of cross-validation, but performed worse compared to the linear models. The pattern of the best predictors somewhat overlapped with the standard tree models, specifically concerning the Number of Games Started and two-point goals.
+The random forest achieved better predictions than standard tree models in terms of cross-validation, but performed worse compared to the linear models. The pattern of the best predictors partly overlaps with the standard tree models, specifically concerning the Number of Games Started and two-point goals, as well as with the linear models, in terms of number of Field Goals and Games. 
+In contrast to the linear models, year was deemed as one of the least important predictors.
 
 Interestingly, the models fitted to the log-transformed and reduced dataset performed noticeably worse than the models from the remaining three sets.
 
@@ -3020,12 +3021,10 @@ boosted_models2 %>%
 
 ```
 
-The best 10 boosted tree models, as revealed by cross-validation, explained between 
+The ten gradient-boosted models with the best performance, as revealed by cross-validation, explained between 
 `r min(boosted_best10$Rsquared)`
-`r max(boosted_best10$Rsquared)` proportion of the total variance
+`r max(boosted_best10$Rsquared)` proportion of the total variance, with most being those fitted to the datasets with a log-transformed outcome. 
 
-
-Most of the best 10 models were those fitted to the full dataset with a log-transformed outcome. 
 
 
 
@@ -3062,12 +3061,8 @@ boosted_rsquared %>%
 ```
 
 
-Each dataset followed a different pattern of preferable gradient-boosting parameters.
-When judging by R-squared, for most datasets better predictions were achieved with a higher number boosting iterations and learning 
-
-When judging by R-squared, models fitted to the full dataset with a log-transformed salary, tended to return better predictions with a higher learning rate
-
-...
+Each dataset followed a different pattern of preferable gradient-boosting parameters. When judged by R-squared, shallow trees generally produced better-performing models, with the possible exception of those fitted to the full log-transformed dataset, where tree depth was a less important factor. 
+Additionally, the comparison of learning rate and number of iterations combinations did not reveal a noticeable preference, except that models with the highest numbers of iterations and a slow learning rate tended to perform worse.
 
 
 #### RMSE and MAE Comparison
