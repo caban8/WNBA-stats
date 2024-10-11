@@ -2722,8 +2722,8 @@ for (i in 1:nrow(forest_performance)) {
 
 
 ```{r}
-# Compare transformed models in terms of RMSE and MAE
-cowplot::plot_grid(plots_forest[[1]], plots_forest[[2]], nrow = 2)
+# Compare models in terms of RMSE 
+cowplot::plot_grid(plots_forest[[1]], plots_forest[[3]], nrow = 2)
 ```
 
 When compared in terms of RMSE and MAE, random forest models fitted to the untransformed datasets revealed a similar pattern of tuning parameter preference to the R-squared comparison.
@@ -2731,8 +2731,8 @@ However, the analysis of mean absolute error identified a different optimal mode
 
 
 ```{r}
-# Compare transformed models in terms of RMSE and MAE
-cowplot::plot_grid(plots_forest[[3]], plots_forest[[4]], nrow = 2)
+# Compare models in terms of MAE
+cowplot::plot_grid(plots_forest[[2]], plots_forest[[4]], nrow = 2)
 
 ```
 The pattern of tuning parameter preference for the transformed dataset model fitting was very similar across all three performance metrics, with the same tuning parameters identified for the optimal models.
@@ -3022,7 +3022,7 @@ boosted_models2 %>%
 ```
 
 The ten gradient-boosted models with the best performance, as revealed by cross-validation, explained between 
-`r min(boosted_best10$Rsquared)`
+`r min(boosted_best10$Rsquared)` and
 `r max(boosted_best10$Rsquared)` proportion of the total variance, with most being those fitted to the datasets with a log-transformed outcome. 
 
 
@@ -3112,12 +3112,14 @@ for (i in 1:nrow(boosted_performance)) {
 
 
 ```{r}
-cowplot::plot_grid(plots_boosted[[3]], plots_boosted[[4]], nrow = 2)
+# Compare models in terms of 
+cowplot::plot_grid(plots_boosted[[2]], plots_boosted[[4]], nrow = 2)
 ```
 
 
 ```{r}
-cowplot::plot_grid(plots_boosted[[1]], plots_boosted[[2]], nrow = 2)
+# Compare models in terms of
+cowplot::plot_grid(plots_boosted[[1]], plots_boosted[[3]], nrow = 2)
 
 
 ```
@@ -3142,7 +3144,10 @@ best_boosted %>%
 
 ```
 
+Judging by gain, number of Games had the highest contribution to the models. 
+This was closely followed by the number of Games Started and Field Goals, perhaps with the exception of the model fitted to the full dataset with a log-transformed salary. The number of Assists, Personal Fouls, and, again with the exception of the full log-transformed dataset, Two-Point Goals were also relatively important.
 
+Additionally, in the case of the full datasets, the importance of percentage metrics for Two-Point Goals, Field Goals, and Free Throws was on par with the importance of the number of Assists and Personal Fouls.
 
 
 
@@ -3152,12 +3157,6 @@ best_boosted %>%
 
 ```{r}
 set.seed(123)
-
-best_boosted %>% 
-  left_join(model_datasets) %>% 
-  mutate(
-    
-  )
 
 
 
@@ -3174,7 +3173,8 @@ best_boosted2 <- best_boosted %>%
     plots_GS = future_map2(fit, x_train, ~pdp::partial(.x, train = .y, pred.var = "GS")),
     plots_FG = future_map2(fit, x_train, ~pdp::partial(.x, train = .y, pred.var = "FG")),
     plots_Two_P = future_map2(fit, x_train, ~pdp::partial(.x, train = .y, pred.var = "Two_P")),
-    plots_PF = future_map2(fit, x_train, ~pdp::partial(.x, train = .y, pred.var = "PF"))
+    plots_PF = future_map2(fit, x_train, ~pdp::partial(.x, train = .y, pred.var = "PF")),
+    plots_AST = future_map2(fit, x_train, ~pdp::partial(.x, train = .y, pred.var = "AST"))
   ) %>% 
   select(dataset, starts_with("plots")) %>% 
   pivot_longer(-dataset, names_to = "predictor_name", values_to = "partial_predictions") 
@@ -3196,22 +3196,19 @@ best_boosted2 %>%
     predictor_name = str_replace(predictor_name, "plots_", ""),
     salary = if_else(str_detect(dataset, "log"), exp(salary), salary)
     ) %>% 
-   ggplot(aes(predictor, salary, color = dataset, group = dataset)) +
-    geom_line() +
-    facet_wrap(~predictor_name, scales = "free") +
-    theme(legend.position = "top")
+  ggplot(aes(predictor, salary, color = dataset, group = dataset)) +
+  geom_line() +
+  facet_wrap(~predictor_name, scales = "free") +
+  theme(legend.position = "top") +
+  guides(color = guide_legend(nrow = 2))
 
 ```
 
 
 
-The more the field Goals, Games Started and Two points goals, the higher was the salary, generally speaking.
+The more Assists, Goals, Games Started, and Two-point goals there were, the higher the salary was, generally speaking. The optimal number of Field Goals, Games Started, and Two-point Goals was around 130, 30, and 90 respectively, with higher numbers not contributing noticeably to a bigger salary. The exception was the number of Field Goals for the model applied to the reduced dataset with the untransformed salary, where going beyond 250 goals was associated with a substantial surge in salary. On a similar note, the maximum salary was reached with a smaller number of Assists when models were applied to the full datasets (around 70) compared to models applied to the reduced datasets (around 180).
 
-The optimal number of Field Goals and Two Point Goals were around 130 and 90 respectively, with higher numbers not increasing the salary anymore. In the case of number of Games Started, the optimal value was around 30.
-
-In contrast, the more the Games and Personal Fouls, the smaller the salary.
-Salary strongly dropped with around 10 Personal Fouls and remained at a similar level until another drop with more than 50 fouls.
-In the case of number of Games, salary started consistently dropping after above more than 10 games.
+In contrast, the more Games and Personal Fouls there were, the smaller the salary. Salary dropped significantly with around 10 Personal Fouls and remained at a similar level until another drop occurred with more than 50 fouls, except in the model applied to the full dataset with the untransformed outcome, where the only drop occurred around 50 fouls. In the case of the number of Games, salary started consistently dropping after more than 10 games
 
 
 
@@ -3326,23 +3323,67 @@ best_tested2 %>%
 
 ```
 
+# Discussion
 
+
+The WNBA salary prediction analysis explored multiple approaches to understand which performance statistics of WNBA players best predicted their salaries. 
+The data included WNBA player stats from 2017 to 2023, alongside player salaries from one year later, adjusted for inflation using the Consumer Price Index (CPI). 
+
+## Data Preparation and Preliminary Findings
+
+1. **Data Characteristics and Challenges**:
+   - **Multicollinearity**: The dataset suffered from multicollinearity, especially among performance metrics like field goals and field goal attempts, which made it difficult to separate individual effects. The correlation between such variables was extremely high (|cor| > 0.8).
+   - **Methodological Issues**: Percentage variables for goal attempts posed a challenge, especially for players who had no attempts, requiring four different versions of the dataset to address these limitations.
+   - **Cleaned Dataset**: The final dataset after cleaning consisted of `r nrow(model_datasets$whole[[1]])` observations. It had a right-skewed distribution for many performance variables, such as field goals, points, and rebounds, with most players having low to mid-range performance stats. This distribution pattern fits a Pareto distribution, common in human performance data.
+   - **Player Sample Bias**: The analysis recognized a potential bias because salary information was more readily available for higher-performing players, limiting the generalizability of findings across all WNBA players.
+
+2. **Model Comparisons**:
+   Several supervised models were trained, including **linear regression (stepwise selection)**, **Lasso regression**, **decision tree**, **random forest**, and **XGBoost (gradient boosting)**. The **XGBoost model** fitted to the reduced dataset with untransformed salary data produced the best performance overall, closely followed by the same model fitted to the log-transformed reduced dataset.
+   
+   - **Best Models**: The **XGBoost boosted tree models** performed best, explaining around 32% of the variance in salary. These models utilized performance measures like **field goals**, **games started**, **assists**, and **two-point field goals** as the most important predictors, which were positively associated with salary. Conversely, **number of games** and **personal fouls** negatively affected salary.
+   - **Tree Models**: Decision tree models reported to have the worst performance, regardless of the dataset, which might be explained by high correlations of predictors.
+   - **Random Forest Models**: These performed better than decision trees, comparably to linear regression models, and worse than boosting models, strongly overlapping with the latter in terms of the most important predictors.
+   - **Linear Models (Stepwise and Lasso)**: Like Random Forest models, these also achieved lower predictive power compared to boosted tree models. Stepwise models highlighted variables like **field goals**, **number of games**, and **year** as key predictors. Lasso regression models reduced multicollinearity but still performed slightly worse than tree-based approaches.
+
+3. **Key Predictors of Salary**:
+   - **Field Goals (FG)**: This was consistently the most important predictor across models. More field goals led to a higher salary, but the relationship leveled off after reaching around 130–150 goals.
+   - **Games Started (GS)**: Players who started more games typically earned higher salaries, with the critical threshold for a noticeable salary increase being around 10–11 games started.
+   - **Two-Point Field Goals (2P)**: Similar to field goals, two-point goals had a strong, positive association with salary.
+   - **Personal Fouls (PF)**: Interestingly, more personal fouls were associated with lower salaries.
+   - **Games Played (G)**: A higher number of games was negatively correlated with salary, which could indicate that players with higher workloads earned relatively less for their performance compared to more specialized or less frequent starters.
+
+4. **Discussion of Model Limitations**:
+   - **Model Limitations**: The analysis highlighted several limitations, such as **non-linearity** in the relationships between predictors and salaries, which made traditional linear models less effective. The **best-performing models** were those that could account for complex interactions, such as XGBoost.
+   - **Heteroscedasticity and Multicollinearity**: The models showed signs of **heteroscedasticity** (i.e., the variance of errors was not constant across predictions), particularly in the untransformed models. Despite attempts to address this with log transformations, the issue persisted to some degree.
+   - **External Validity**: The project acknowledged that due to incomplete salary data (missing for many lower-paid players), the analysis likely favored better-performing players, limiting the external validity of the conclusions for all WNBA players.
+
+5. **Theoretical Considerations**
+
+covid
+
+
+## Conclusion
+
+The project successfully predicted WNBA players' salaries with reasonable accuracy using advanced machine learning models like XGBoost and random forests. These models highlighted the complexity of the relationship between player performance and salary, showing that direct performance metrics (field goals, games started) were strong predictors of salary, while other metrics like the number of games and personal fouls had a negative impact.
+
+The analysis suggested that non-linear models are better suited to capturing the intricate relationships between salary and player performance, particularly when addressing issues like multicollinearity and non-linearity.
 
 
 # Discussion
 
 
-The role of COVID
+
+-   the separation to four dataset did play an important role which was reflected in relatively big difference in performance metrics between final models
+    -   it showed that including goal stats both in terms of percentage of successful attempts and pairs of absolute goal attempts and successes resulted in worse models
+    -   this could be explained by its methodological limitations that had few consequences
+        -   First, the percentage variables contained missing values for players who had both 0 attempts and 0 successes 
+    -   this could be explained by either of the two reasons: 
+        1) percentages of successful attempts had missing values making the datasets reduced of them more complete
+        2) 
+-   The role of COVID
 
 Limitations
 -   The salary data was not available for all players, especially those with lower wages
 
 
 
-
-
-
-# INNE
-
-
-Może dodać usuwanie obiektów, ale też i z ciekawości, wykorzystaną pamieć w danym momencie.
